@@ -31,10 +31,17 @@ class Settings(BaseSettings):
     # 格式:redis://localhost:6379/0
     REDIS_URL: str | None = None
 
-    # ── JWT(第 11 阶段启用)──
+    # ── JWT(第 11 阶段启用,第 12 阶段调整:access 缩短 + refresh)──
     JWT_SECRET: str = "change_me"
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24h
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # 引入 refresh 后标准值(第 11 阶段曾临时 1440/24h)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # ── 限流(第 12 阶段启用)──
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_ROUTES: str = "/api/v1/auth/login,/api/v1/auth/register"
+    RATE_LIMIT_MAX_REQUESTS: int = 5
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
 
 
 @lru_cache

@@ -16,6 +16,7 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "bcrypt>=4.2.0",
     "PyJWT>=2.9.0",
+    "redis>=5.0,<6.0",
 ]
 
 [project.optional-dependencies]

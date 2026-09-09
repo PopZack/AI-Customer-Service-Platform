@@ -20,8 +20,28 @@ class TokenResponse(BaseModel):
     """登录成功返回的 JWT token。"""
 
     access_token: str = Field(..., description="JWT access token")
+    refresh_token: str = Field(..., description="JWT refresh token,用于续签")
     token_type: str = Field("bearer", description="token 类型,固定 bearer")
-    expires_in: int = Field(..., description="token 有效期(秒)")
+    expires_in: int = Field(..., description="access token 有效期(秒)")
+    refresh_expires_in: int = Field(..., description="refresh token 有效期(秒)")
+
+
+class RefreshTokenRequest(BaseModel):
+    """刷新 token 请求。"""
+
+    refresh_token: str = Field(..., description="有效的 refresh token")
+
+
+class LogoutRequest(BaseModel):
+    """登出请求。"""
+
+    refresh_token: str = Field(..., description="待吊销的 refresh token")
+
+
+class LogoutResponse(BaseModel):
+    """登出响应。"""
+
+    revoked: bool = Field(..., description="是否成功吊销(已无效的 token 返回 False)")
 
 
 class UserInfoResponse(BaseModel):
