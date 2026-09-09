@@ -221,6 +221,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 # ── 项目专属 ──
+# 部署用 SSH 密钥(含私钥,绝不可入库)
+.ssh_deploy/
 # IDE
 .idea/
 .vscode/
