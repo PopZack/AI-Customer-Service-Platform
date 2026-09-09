@@ -12,11 +12,29 @@ logger = logging.getLogger("app.exceptions")
 
 
 class AppException(Exception):
-    """业务异常基类:业务逻辑中主动抛出,携带 code + message。"""
+    """业务异常基类:业务逻辑中主动抛出,携带 code + message + http_status。
 
-    def __init__(self, code: int = -1, message: str = "业务异常"):
+    - code: 业务码(0=成功,非 0=错误),写入响应 body.code
+    - http_status: HTTP 响应状态码(4xx/5xx)
+    - 若未显式传 http_status:
+        * code 在 400-599 范围 → http_status = code
+        * 其他 code → http_status = 400(默认)
+    """
+
+    def __init__(
+        self,
+        code: int = -1,
+        message: str = "业务异常",
+        http_status: int | None = None,
+    ):
         self.code = code
         self.message = message
+        if http_status is not None:
+            self.http_status = http_status
+        elif 400 <= code <= 599:
+            self.http_status = code
+        else:
+            self.http_status = 400
         super().__init__(message)
 
 
@@ -26,14 +44,15 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppException)
     async def _app_exception_handler(request: Request, exc: AppException):
         logger.warning(
-            "业务异常 %s %s -> code=%s msg=%s",
+            "业务异常 %s %s -> code=%s msg=%s http=%s",
             request.method,
             request.url.path,
             exc.code,
             exc.message,
+            exc.http_status,
         )
         return JSONResponse(
-            status_code=400,
+            status_code=exc.http_status,
             content=error(exc.code, exc.message).model_dump(),
         )
 

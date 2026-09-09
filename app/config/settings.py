@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # 格式:redis://localhost:6379/0
     REDIS_URL: str | None = None
 
+    # ── JWT(第 11 阶段启用)──
+    JWT_SECRET: str = "change_me"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24h
+
 
 @lru_cache
 def get_settings() -> Settings:
