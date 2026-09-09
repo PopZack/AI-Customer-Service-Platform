@@ -14,6 +14,7 @@ from app.common.middleware.request_id import RequestIDMiddleware
 from app.config.logging import setup_logging
 from app.config.settings import get_settings
 from app.infrastructure.database import close_db, init_db
+from app.infrastructure.llm import close_llm, init_llm
 from app.infrastructure.redis import close_redis, init_redis
 
 settings = get_settings()
@@ -27,8 +28,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     # 第 12 阶段:初始化 Redis 连接池
     await init_redis()
+    # 第 13 阶段:初始化 LLM 客户端
+    await init_llm()
     yield
     # 释放资源(先关应用层依赖,再关 DB)
+    await close_llm()
     await close_redis()
     await close_db()
 

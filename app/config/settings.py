@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     RATE_LIMIT_MAX_REQUESTS: int = 5
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
+    # ── LLM(第 13 阶段启用)──
+    # OpenAI 兼容接口,支持 DeepSeek / Qwen / Moonshot / 豆包等
+    LLM_API_KEY: str | None = None
+    LLM_BASE_URL: str | None = None  # 例如 https://api.deepseek.com/v1
+    LLM_MODEL: str = "deepseek-chat"
+    LLM_MAX_TOKENS: int = 2048
+    LLM_TEMPERATURE: float = 0.7
+    LLM_TIMEOUT: float = 30.0
+    LLM_SYSTEM_PROMPT: str = "你是企业级 AI 客服助手,请专业、礼貌、准确地回答用户问题。"
+    LLM_MAX_CONTEXT_MESSAGES: int = 20  # 每次最多带入的历史消息数
+
 
 @lru_cache
 def get_settings() -> Settings:
