@@ -12,18 +12,21 @@ from app.common.exceptions.handler import register_exception_handlers
 from app.common.middleware.request_id import RequestIDMiddleware
 from app.config.logging import setup_logging
 from app.config.settings import get_settings
+from app.infrastructure.database import close_db, init_db
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期:启动前初始化日志,后续阶段在此初始化/释放数据库、Redis 等连接。"""
+    """应用生命周期:启动前初始化日志/数据库,关闭时释放资源。"""
     setup_logging()
-    # TODO(第 10 阶段):初始化数据库连接池
+    # 第 10 阶段:初始化数据库连接池
+    await init_db()
     # TODO(第 12 阶段):初始化 Redis 连接
     yield
-    # TODO:关闭连接
+    # 释放资源
+    await close_db()
 
 
 def create_app() -> FastAPI:

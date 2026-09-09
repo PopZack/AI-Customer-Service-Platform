@@ -223,6 +223,9 @@ __marimo__/
 # ── 项目专属 ──
 # 部署用 SSH 密钥(含私钥,绝不可入库)
 .ssh_deploy/
+# 本地 SQLite 开发数据库
+*.db
+*.sqlite3
 # IDE
 .idea/
 .vscode/

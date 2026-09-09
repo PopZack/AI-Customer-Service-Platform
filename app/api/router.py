@@ -1,6 +1,9 @@
 """API 总路由:聚合各业务模块 router,统一挂 /api/v1 前缀。"""
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import get_db_session
 from app.modules.auth.router import router as auth_router
 from app.modules.chat.router import router as chat_router
 from app.modules.knowledge.router import router as knowledge_router
@@ -18,6 +21,7 @@ api_router.include_router(ticket_router, prefix="/tickets", tags=["Tickets"])
 
 
 @api_router.get("/health", tags=["Health"])
-async def health_check():
-    """健康检查(v1 前缀下)。"""
-    return {"status": "ok"}
+async def health_check(db: AsyncSession = Depends(get_db_session)):
+    """健康检查(v1 前缀下):包含数据库连通性。"""
+    await db.execute(text("SELECT 1"))
+    return {"status": "ok", "database": "connected"}
