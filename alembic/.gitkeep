@@ -1,0 +1,1 @@
+﻿第 10 阶段(V2 数据库)用 `uv run alembic init` 正式初始化(生成 env.py / versions/ / alembic.ini)。届时先删除本占位文件。

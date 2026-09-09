@@ -1,3 +1,6 @@
+#手动不提交git
+.trae/documents/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -216,3 +219,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ── 项目专属 ──
+# IDE
+.idea/
+.vscode/
+# uv 本地 Python 版本(可选;若团队统一 Python 版本可提交保留)
+.python-version
