@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     LLM_SYSTEM_PROMPT: str = "你是企业级 AI 客服助手,请专业、礼貌、准确地回答用户问题。"
     LLM_MAX_CONTEXT_MESSAGES: int = 20  # 每次最多带入的历史消息数
 
+    # ── 知识库 / RAG(第 14 阶段启用)──
+    # 上传文件落盘目录(本地磁盘;生产可换对象存储,storage_path 字段已预留)
+    UPLOAD_DIR: str = "./data/uploads"
+    MAX_UPLOAD_MB: int = 20  # 单文件大小上限
+    EMBED_BATCH_SIZE: int = 64  # 向量化批大小(单批过大时 ONNX 推理内存会飙升)
+
 
 @lru_cache
 def get_settings() -> Settings:

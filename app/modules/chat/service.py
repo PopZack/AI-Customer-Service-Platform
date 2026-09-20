@@ -8,16 +8,18 @@
 注意:SSE 场景下,DB session 生命周期必须由调用方管理(EventSourceResponse 返回后
 FastAPI 依赖注入会关闭 session,但 AI 回复需要在流式结束后保存)。
 """
-from typing import AsyncGenerator
+import logging
+from collections.abc import AsyncGenerator
 
 from openai.types.chat import ChatCompletionMessageParam
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.prompt.system import get_system_prompt
+from app.ai.prompt.system import build_rag_system_prompt, get_system_prompt
+from app.ai.rag.config import MAX_CONTEXT_CHARS, RETRIEVAL_TOP_K
+from app.ai.rag.retriever import build_context_block, retrieve
 from app.common.exceptions.handler import AppException
 from app.config.settings import get_settings
 from app.infrastructure.llm import chat_stream, is_llm_available
-from app.models.conversation import Conversation, Message
 from app.modules.chat.repository.chat_repository import (
     ConversationRepository,
     MessageRepository,
@@ -28,6 +30,8 @@ from app.modules.chat.schemas import (
     ConversationResponse,
     MessageResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ChatService:
@@ -109,7 +113,7 @@ class ChatService:
         try:
             async for chunk in chat_stream(messages):
                 yield chunk
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 —— 必须转成 SSE error 事件,不能中断流
             # 失败时 yield 特殊标记,由 router 识别后发 error SSE 事件
             yield f"[AI_ERROR]{e}[/AI_ERROR]"
 
@@ -118,7 +122,7 @@ class ChatService:
     async def _build_llm_messages(
         self, conversation_id: int, current_user_message: str
     ) -> list[ChatCompletionMessageParam]:
-        """构建发送给 LLM 的 messages 列表。"""
+        """构建发送给 LLM 的 messages 列表(含 RAG 检索增强)。"""
         settings = get_settings()
         history = await self.msg_repo.list_by_conversation(conversation_id)
 
@@ -126,7 +130,7 @@ class ChatService:
         history = history[-settings.LLM_MAX_CONTEXT_MESSAGES :]
 
         messages: list[ChatCompletionMessageParam] = [
-            {"role": "system", "content": get_system_prompt()}
+            {"role": "system", "content": await self._build_system_prompt(current_user_message)}
         ]
 
         for msg in history:
@@ -136,3 +140,24 @@ class ChatService:
                 messages.append({"role": "assistant", "content": msg.content})
 
         return messages
+
+    async def _build_system_prompt(self, question: str) -> str:
+        """带知识库检索的系统提示词。
+
+        检索失败不致命:降级为不带资料的基础提示词,聊天仍可用
+        (与 LLM 未配置时返回 503 的处理取舍不同 —— 检索是增强,不是前提)。
+        """
+        try:
+            chunks = await retrieve(self.session, question, top_k=RETRIEVAL_TOP_K)
+        except Exception:
+            logger.exception("知识库检索失败,本轮降级为无资料回答")
+            return get_system_prompt()
+
+        if not chunks:
+            # M2 的隐式转人工判定会用到这个信号(连续 N 次检索为空)
+            logger.info("知识库无命中: %s", question[:40])
+            return get_system_prompt()
+
+        context = build_context_block(chunks, MAX_CONTEXT_CHARS)
+        logger.info("知识库命中 %s 块,注入上下文 %s 字", len(chunks), len(context))
+        return build_rag_system_prompt(context)

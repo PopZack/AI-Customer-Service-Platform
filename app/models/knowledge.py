@@ -1,9 +1,21 @@
 """知识库系统模型: knowledge_base / document / document_chunk / vector_index。"""
 from datetime import datetime
+from typing import ClassVar
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, SmallInteger, String, Text, func
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Integer,
+    SmallInteger,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.ai.rag.config import EMBEDDING_DIM
 from app.infrastructure.database.base import Base, BigIntPKMixin
 
 
@@ -15,6 +27,30 @@ def _created_at() -> Mapped[datetime]:
         nullable=False,
         comment="创建时间",
     )
+
+
+class DocumentStatus:
+    """文档处理状态(与 Document.status 列取值一一对应)。
+
+    流程:UPLOADED → PARSING → CHUNKING → EMBEDDING → INDEXED
+    任一步骤异常 → FAILED,并把原因写入 Document.error_reason。
+    """
+
+    UPLOADED = 0
+    PARSING = 1
+    CHUNKING = 2
+    EMBEDDING = 3
+    INDEXED = 4
+    FAILED = 5
+
+    TEXT: ClassVar[dict[int, str]] = {
+        0: "上传中",
+        1: "解析中",
+        2: "切块中",
+        3: "向量化中",
+        4: "已完成",
+        5: "失败",
+    }
 
 
 # ── 知识库 ──────────────────────────────────────────────
@@ -53,6 +89,9 @@ class Document(Base, BigIntPKMixin):
     file_type: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="文件类型")
     storage_path: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="存储路径")
     status: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False, comment="状态:0上传中 1解析中 2切块中 3向量化 4完成 5失败")
+    error_reason: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="处理失败原因(status=5 时填写)"
+    )
     upload_user: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("user.id", ondelete="SET NULL"), nullable=True, comment="上传人"
     )
@@ -75,6 +114,11 @@ class DocumentChunk(Base, BigIntPKMixin):
     chunk_no: Mapped[int] = mapped_column(Integer, nullable=False, comment="块序号")
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="块内容")
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="token 数")
+    # pgvector 向量列。维度与 EMBEDDING_MODEL_NAME 绑定(见 app/ai/rag/config.py),
+    # 换模型必须重建全量向量。bge 系列用余弦距离(<=>)检索。
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBEDDING_DIM), nullable=True, comment="嵌入向量(512 维,pgvector)"
+    )
     embedding_status: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False, comment="向量化状态:0未向量化 1已向量化 2失败")
     created_at: Mapped[datetime] = _created_at()
 

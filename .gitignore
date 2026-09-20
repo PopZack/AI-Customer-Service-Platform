@@ -2,6 +2,9 @@
 .trae/
 .workbuddy/
 
+# 知识库上传的原始文件(本地磁盘存储,不入库)
+data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

@@ -3,6 +3,15 @@
 职责:创建 app、加载配置、初始化日志、注册中间件/异常/路由、健康检查。
 本文件不是业务代码,而是整个系统的启动器。
 """
+# 必须放在所有业务 import 之前:onnxruntime / OpenBLAS 的线程栈分配依赖这两个变量,
+# 且只在 numpy 首次导入前设置才生效(否则报 "OpenBLAS error: Memory allocation
+# still failed after 10 retries")。embedding 客户端里也设了一次,这里是双保险。
+import os as _os
+
+_os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+_os.environ.setdefault("OMP_NUM_THREADS", "1")
+
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -14,15 +23,17 @@ from app.common.middleware.request_id import RequestIDMiddleware
 from app.config.logging import setup_logging
 from app.config.settings import get_settings
 from app.infrastructure.database import close_db, init_db
+from app.infrastructure.embedding import close_embedding, init_embedding
 from app.infrastructure.llm import close_llm, init_llm
 from app.infrastructure.redis import close_redis, init_redis
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期:启动前初始化日志/数据库/Redis,关闭时释放资源。"""
+    """应用生命周期:启动前初始化日志/数据库/Redis/LLM/embedding,关闭时释放资源。"""
     setup_logging()
     # 第 10 阶段:初始化数据库连接池
     await init_db()
@@ -30,8 +41,12 @@ async def lifespan(app: FastAPI):
     await init_redis()
     # 第 13 阶段:初始化 LLM 客户端
     await init_llm()
+    # 第 14 阶段:预热本地 embedding 模型(首次含模型下载;失败降级,不阻塞启动)
+    if not await init_embedding():
+        logger.warning("embedding 模型加载失败,知识库向量检索将不可用(关键词检索仍可工作)")
     yield
     # 释放资源(先关应用层依赖,再关 DB)
+    await close_embedding()
     await close_llm()
     await close_redis()
     await close_db()

@@ -9,6 +9,31 @@ def get_system_prompt() -> str:
     return settings.LLM_SYSTEM_PROMPT
 
 
+# ── RAG 检索增强(第 14 阶段)────────────────────────────
+
+# 有检索结果时追加在系统提示词之后。要点:
+# 1. 明确"只依据资料回答"—— 这是抑制幻觉最有效的一条
+# 2. 要求带 [n] 引用标注 —— 用户可核对,也便于评测 faithfulness
+# 3. 资料没有时**必须**说不知道并引导转人工 —— 而不是硬编
+#    (这条同时是 M2 隐式转人工的判定信号之一)
+RAG_PROMPT_TEMPLATE = """以下是从企业知识库中检索到的参考资料,请优先依据它们回答用户问题。
+
+参考资料:
+{context}
+
+回答要求:
+1. 严格依据上述参考资料作答,不要引入资料之外的推测
+2. 在答案中标注引用编号,例如"退款一般 3 到 5 个工作日到账[1]"
+3. 若参考资料不足以回答该问题,直接说明"知识库中暂未找到相关信息",
+   并建议用户转人工客服,不要编造答案
+4. 使用中文回答,保持客服的专业与礼貌"""
+
+
+def build_rag_system_prompt(context: str) -> str:
+    """把检索到的上下文拼进系统提示词。"""
+    return f"{get_system_prompt()}\n\n{RAG_PROMPT_TEMPLATE.format(context=context)}"
+
+
 # 预设提示词库(可扩展,后续支持多场景切换)
 SYSTEM_PROMPTS: dict[str, str] = {
     "default": (
