@@ -283,7 +283,7 @@ AI-Customer-Service-Platform/
 | 15 | V7 Agent + Tool | 🛠️ | ⏳ |
 | 16 | V8 AI + 人工协同 | 👥 | ⏳ |
 | 17 | V9 消息队列 / Worker | 📨 | ⏳ |
-| 18 | V10 测试与工程化 | ✅ | ⏳ |
+| 18 | V10 测试与工程化 | 📝 | ⏳ |
 | 19 | V11 Docker + Nginx + CI/CD | 🐳 | ⏳ |
 | 20 | V12 日志 / 监控 / Tracing | 📊 | ⏳ |
 | 21 | V13 AI Evaluation | 🧪 | ⏳ |
@@ -298,9 +298,10 @@ AI-Customer-Service-Platform/
 | 文件 | 内容 |
 |---|---|
 | [0-完整开发路线图](./design_docs/0-企业AI客服平台-完整开发路线图-V1.0.md) | 22 阶段总施工图 |
-| [1-PRD](./design_docs/1-企业AI客服平台-PRD-V1.0.md) | 产品需求文档 |
+| [1-PRD](./design_docs/1-PRD-V1.0-企业AI客服平台.md) | 产品需求文档 |
 | [2-领域模型](./design_docs/2-企业AI客服平台-领域模型设计-V1.0.md) | 核心领域对象 |
-| [4-ER 模型](./design_docs/4-企业AI客服平台-数据库ER模型-V1.0.md) | 数据库实体关系 |
+| [3-核心业务流程](./design_docs/3-企业AI客服平台-核心业务流程设计-V1.0.md) | 5 条核心链路逐步拆解 |
+| [4-ER 模型](./design_docs/4-企业AI客服平台-数据库ER模型设计-V1.0.md) | 数据库实体关系 |
 | [5-表结构](./design_docs/5-企业AI客服平台-数据库表结构设计-V1.0.md) | 完整 DDL |
 | [6-系统架构](./design_docs/6-企业AI客服平台-系统架构设计-V1.0.md) | 架构决策 + 分层 |
 | [7-API 设计](./design_docs/7-企业AI客服平台-API接口设计-V1.0.md) | 接口规范 |
