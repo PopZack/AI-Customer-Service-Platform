@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector:pg16 = PostgreSQL 16 + pgvector 扩展(RAG 向量检索用)
+    # 基于官方 PG16 构建,数据目录布局一致,可直接复用已有的 postgres_data 卷
+    image: pgvector/pgvector:pg16
     container_name: ai_cs_postgres
     restart: unless-stopped
     environment:
