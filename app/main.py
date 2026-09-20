@@ -13,8 +13,11 @@ _os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.router import api_router
 from app.common.exceptions.handler import register_exception_handlers
@@ -77,6 +80,16 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["Health"])
     async def _health():
         return {"status": "ok"}
+
+    # 静态演示页(第 14 阶段 M1)。目录不存在时跳过,不影响 API 启动。
+    static_dir = Path(__file__).resolve().parent.parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+        @app.get("/", include_in_schema=False)
+        async def _index():
+            """根路径直接跳到演示页,省得手敲路径。"""
+            return RedirectResponse("/static/index.html")
 
     return app
 

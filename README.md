@@ -12,7 +12,7 @@
 
 ## ✨ 功能亮点
 
-### 已实现（Phase 9-13）
+### 已实现（Phase 9-14）
 
 | 能力 | 说明 | 阶段 |
 |---|---|---|
@@ -21,10 +21,13 @@
 | 🔐 用户认证 | 注册 / 登录 / JWT 双 token（access + refresh）/ 刷新轮换 / 登出黑名单 | Phase 11 |
 | ⚡ Redis 异步 | 限流中间件 / 健康检查 / 缓存工具类（铺路） | Phase 12 |
 | 🤖 LLM + AI Chat | OpenAI 兼容客户端 / SSE 流式输出 / 多轮上下文 / 会话 CRUD | Phase 13 |
+| 📚 RAG 知识库 | 文档上传解析切块 / 本地 embedding / pgvector 入库 / 混合检索 / 带引用回答 | Phase 14 |
 
-### 规划中（Phase 14-22）
+### 规划中（Phase 15-22）
 
-RAG 知识库 → Agent + Tool → 人工协同 → 消息队列 → 测试 → Docker + CI/CD → 监控 → AI 评估 → 生产优化
+Agent + Tool → 人工协同 → 测试与工程化 → Docker + CI/CD → 监控 → AI 评估 → 生产优化
+
+> 收尾采用**精简路线**：Phase 15/16 做满，**Phase 17 消息队列跳过**（文档解析与 embedding 改用 FastAPI BackgroundTasks，本项目无高并发场景），Phase 18-22 按精简版收尾。
 
 ---
 
@@ -53,7 +56,7 @@ Service（业务逻辑，唯一入口）
 Repository（CRUD + 查询，Service 唯一的数据访问通道）
 ```
 
-外加 **Infrastructure** 层隔离外部技术细节（数据库/Redis/Milvus/LLM），业务代码不直接碰 `redis.set(...)`、`pg.query(...)`、`llm.stream(...)`。
+外加 **Infrastructure** 层隔离外部技术细节（数据库 / Redis / pgvector / LLM / embedding），业务代码不直接碰 `redis.set(...)`、`pg.query(...)`、`llm.stream(...)`、`model.embed(...)`。
 
 ### AI 能力独立成层
 
@@ -62,6 +65,21 @@ AI 相关（Router → Agent → RAG → LLM）不混进业务模块，单独在
 ### SSE 流式的坑
 
 SSE 端点不能用 FastAPI 依赖注入的 DB session——`EventSourceResponse` 返回后依赖就 teardown 了，但 AI 回复要在流式结束后才入库。解决办法：**在 event_generator 内部用 `async_session_factory()` 创建独立 session**，由 generator 自己管理生命周期。
+
+同样的理由适用于**后台任务**：文档上传后要异步做「解析 → 切块 → 向量化」，而那时请求的 session 已关闭，所以 `app/tasks/document_tasks.py` 每一步都自己开新 session、短事务提交，状态才能被前端轮询到。
+
+> ⚠️ 前端注意：`/api/v1/chat` 是 **POST**，而浏览器的 `EventSource` 只支持 GET。
+> 所以演示页用 `fetch` + `ReadableStream` 手工解析 SSE 帧（见 `static/index.html`）。
+
+### RAG 的两个关键取舍
+
+**1. 向量库用 pgvector，不用 Milvus。**
+
+复用已在跑的 PostgreSQL，向量与业务数据**同库同事务**——上传文档时「切块入库 + 向量入库」是一个原子操作，不会出现跨库双写的脏状态。代价是放弃了 Milvus 的分布式能力，但本项目单机规模远没到那个量级，换来的是零新增容器、零一致性维护。
+
+**2. 关键词检索用 bigram，不用 `tsvector`。**
+
+PostgreSQL 的全文检索**没有中文分词器**（需要 zhparser 扩展，官方镜像里没有），`tsvector` 对中文基本不可用。这里用**字符二元组匹配**：把查询切成 bigram，统计命中数排序，配合 `pg_trgm` 的 GIN 索引加速。对客服场景的短查询足够鲁棒，且完全在 SQL 内完成。
 
 ---
 
@@ -76,7 +94,9 @@ SSE 端点不能用 FastAPI 依赖注入的 DB session——`EventSourceResponse
 | 缓存/异步 | Redis（Docker） | 7-alpine |
 | 认证 | bcrypt + PyJWT | 双 token + 黑名单 |
 | **LLM** | **openai SDK + sse-starlette** | **OpenAI 兼容接口** |
-| 向量库 | Milvus | Phase 14 |
+| **向量库** | **pgvector**（PostgreSQL 扩展，非独立服务） | **0.8.0，512 维** |
+| **Embedding** | **fastembed**（进程内 ONNX 推理，无需外部服务 / API key） | **BAAI/bge-small-zh-v1.5** |
+| 文档解析 | pymupdf（PDF）+ python-docx（DOCX） | Phase 14 |
 | 部署 | Docker Compose | Phase 19 |
 
 ---
@@ -92,13 +112,18 @@ SSE 端点不能用 FastAPI 依赖注入的 DB session——`EventSourceResponse
 
 ```bash
 # 1. 启动 PostgreSQL + Redis（Docker）
+#    ⚠️ postgres 用的是 pgvector/pgvector:pg16 镜像（PG16 + vector 扩展）。
+#    网络能直连 Docker Hub 时 compose 会自动拉取；拉不动（国内常见）就先本地构建同名镜像：
+#        docker build -t pgvector/pgvector:pg16 docker/pgvector/
+#    该 Dockerfile 只用「本地已有的 postgres:16-alpine + Alpine apk 源 +
+#    随仓库携带的 pgvector 源码包」，完全不依赖 Docker Hub。
 docker compose up -d
 
 # 2. 安装依赖 + 配环境
-uv sync
+uv sync --extra dev
 cp .env.example .env
 
-# 3. 数据库迁移
+# 3. 数据库迁移（会创建 pgvector / pg_trgm 扩展、向量列与 HNSW 索引）
 uv run alembic upgrade head
 
 # 4. （可选）配置 LLM，不配置也能跑，AI 聊天会返回 503
@@ -110,16 +135,24 @@ uv run alembic upgrade head
 #    编辑 .env:
 #      LLM_API_KEY=sk-xxx
 #      LLM_BASE_URL=https://api.deepseek.com/v1
+#    注意：embedding 用的是本地模型，**不需要**任何 API key。
 
 # 5. 启动
 uv run uvicorn app.main:app --reload
 ```
 
+首次启动会下载 embedding 模型（`BAAI/bge-small-zh-v1.5`，约 90MB），缓存在
+`%LOCALAPPDATA%/fastembed_cache`（Windows）或 `~/.cache/fastembed_cache`。
+下载失败不影响启动，只是向量检索降级为纯关键词检索。
+
 访问：
+- **演示页**：<http://localhost:8000/static/index.html>（上传文档 / 带引用对话 / 检索预览）
 - 健康检查（liveness）：<http://localhost:8000/health>
 - 健康检查（readiness，含 DB + Redis）：<http://localhost:8000/api/v1/health>
 - API 文档（Swagger）：<http://localhost:8000/docs>
 - ReDoc：<http://localhost:8000/redoc>
+
+上传的原始文件落在 `./data/uploads/`（已 gitignore）。
 
 ### 常用命令
 
@@ -132,10 +165,17 @@ uv run alembic downgrade -1
 # 重新生成依赖锁
 uv lock
 
-# 格式检查
+# 静态检查
 uv run ruff check .
-uv run black --check .
+uv run ruff format .          # 格式化(ruff 的 formatter 兼容 black,已不再单独引 black)
+
+# 重建 pgvector 镜像(仅当 docker compose 拉不到镜像时需要)
+docker build -t pgvector/pgvector:pg16 docker/pgvector/
 ```
+
+> ⚠️ **已知待收敛**：`uv run ruff check .` 目前**不是全绿**（存量错误，主要是 FastAPI
+> 依赖注入写法触发的 `B008`）。收敛排在 Phase 18「测试与工程化」。新代码请保证自己的
+> 文件零新增错误 —— 例如用 `Annotated[AsyncSession, Depends(...)]` 代替 `db: AsyncSession = Depends(...)`。
 
 ---
 
@@ -184,6 +224,51 @@ data: {"type":"error","message":"LLM 超时"}    ← 出错
 data: {"type":"done"}
 ```
 
+回答会基于知识库检索结果，并在正文里标注引用编号（如 `退款一般 3 到 5 个工作日到账[1]`）。
+
+### Knowledge — 知识库与 RAG（Phase 14）
+
+| 方法 | 端点 | 说明 |
+|---|---|---|
+| POST | `/api/v1/knowledge-bases` | 创建知识库 |
+| GET | `/api/v1/knowledge-bases` | 知识库列表 |
+| POST | `/api/v1/knowledge-bases/{kb_id}/documents` | 上传文档（multipart），立即返回并异步索引 |
+| GET | `/api/v1/knowledge-bases/{kb_id}/documents` | 文档列表 |
+| GET | `/api/v1/knowledge-bases/{kb_id}/documents/{doc_id}` | 文档详情（含索引状态与失败原因） |
+| GET | `/api/v1/knowledge-bases/{kb_id}/documents/{doc_id}/chunks` | 查看切块结果 |
+| DELETE | `/api/v1/knowledge-bases/{kb_id}/documents/{doc_id}` | 删除文档及其切块与向量 |
+| POST | `/api/v1/knowledge-bases/{kb_id}/search` | 检索预览：直接看混合检索命中了哪些块 |
+
+支持 PDF / DOCX / MD / TXT，单文件上限 20MB。
+
+**文档索引状态**（对应 `document.status`，前端轮询详情接口即可看到进度）：
+
+```
+0 上传中 → 1 解析中 → 2 切块中 → 3 向量化中 → 4 已完成
+                                    任意一步失败 → 5 失败（原因写入 error_reason）
+```
+
+**检索预览**是调试切块参数最有用的接口——不经过 LLM，直接返回命中的块与 RRF 分数：
+
+```json
+// POST /api/v1/knowledge-bases/1/search
+{ "query": "退款要多长时间", "top_k": 3 }
+```
+
+```json
+{
+  "code": 0,
+  "data": {
+    "query": "退款要多长时间",
+    "total": 3,
+    "hits": [
+      { "chunk_id": 6, "document_id": 2, "file_name": "售后服务政策.md",
+        "content": "退款时效\n用户提交退款申请后…", "rrf_score": 0.03279 }
+    ]
+  }
+}
+```
+
 ### 认证流程
 
 ```
@@ -222,22 +307,28 @@ AI-Customer-Service-Platform/
 │   │   ├── auth/               # 🔐 用户认证（register/login/refresh/logout/me）
 │   │   ├── user/               # 用户管理
 │   │   ├── chat/               # 💬 会话 + AI 聊天（SSE 流式）
-│   │   ├── knowledge/          # 知识库
+│   │   ├── knowledge/          # 📚 知识库 + 文档上传 + 检索预览
 │   │   └── ticket/             # 工单
 │   ├── ai/                     # 🤖 AI 能力层（独立于业务模块）
 │   │   ├── router/             # AI Router（意图识别）
-│   │   ├── agent/              # Agent + Tool
-│   │   ├── rag/                # 检索增强生成
+│   │   ├── agent/              # Agent + Tool（Phase 15）
+│   │   ├── rag/                # ✅ 检索增强生成
+│   │   │   ├── config.py       #   模型名/维度/切块/检索参数（写死的常量）
+│   │   │   ├── parser.py       #   PDF/DOCX/MD/TXT 文本抽取
+│   │   │   ├── chunker.py      #   标题软边界 + 重叠切块
+│   │   │   ├── vector_store.py #   VectorStore 抽象 + pgvector 实现
+│   │   │   └── retriever.py    #   向量 + 关键词混合检索（RRF 融合）
 │   │   ├── memory/             # 对话记忆
-│   │   ├── prompt/             # Prompt 模板（system.py）
+│   │   ├── prompt/             # Prompt 模板（system.py，含 RAG 提示词）
 │   │   ├── llm/                # LLM 客户端（预留）
 │   │   └── tools/              # Tool 定义
 │   ├── infrastructure/         # 外部技术实现
 │   │   ├── database/           # PostgreSQL（async engine + session）
 │   │   ├── redis/              # Redis（client + ratelimit + cache）
 │   │   ├── llm/                # LLM API 封装（init/close/chat_stream）
-│   │   ├── milvus/             # 向量库（Phase 14）
-│   │   ├── mq/                 # 消息队列（Phase 17）
+│   │   ├── embedding/          # ✅ 本地 embedding（fastembed ONNX 进程内推理）
+│   │   ├── milvus/             # 向量库（已改用 pgvector，此目录保留占位）
+│   │   ├── mq/                 # 消息队列（Phase 17 已按精简路线跳过）
 │   │   └── storage/            # 对象存储
 │   ├── common/                 # 通用层
 │   │   ├── exceptions/         # 统一异常 + 全局 handler
@@ -250,9 +341,13 @@ AI-Customer-Service-Platform/
 │   ├── models/                 # SQLAlchemy ORM 模型
 │   ├── config/                 # settings + logging
 │   ├── schemas/                # 全局 Pydantic schemas
-│   └── tasks/                  # Background tasks
+│   └── tasks/                  # ✅ 文档索引后台任务（解析→切块→向量化）
+├── static/
+│   └── index.html              # ✅ 最小演示页（原生 HTML + fetch 流式）
+├── docker/
+│   └── pgvector/Dockerfile     # ✅ 本地构建 pgvector 镜像（不依赖 Docker Hub）
 ├── alembic/                    # 数据库迁移
-├── docker-compose.yml          # PostgreSQL + Redis
+├── docker-compose.yml          # PostgreSQL(pgvector) + Redis
 ├── pyproject.toml              # 依赖声明（uv）
 ├── .env.example                # 环境变量模板
 └── design_docs/                # 完整设计文档
@@ -279,10 +374,10 @@ AI-Customer-Service-Platform/
 | 11 | V3 认证与权限 | 🔐 | ✅ |
 | 12 | V4 Redis + 异步 | ⚡ | ✅ |
 | 13 | V5 LLM + AI Chat | 🤖 | ✅ |
-| 14 | V6 RAG 知识库 | 📚 | ⏳ 下一阶段 |
-| 15 | V7 Agent + Tool | 🛠️ | ⏳ |
+| 14 | V6 RAG 知识库 | 📚 | ✅ |
+| 15 | V7 Agent + Tool | 🛠️ | ⏳ 下一阶段 |
 | 16 | V8 AI + 人工协同 | 👥 | ⏳ |
-| 17 | V9 消息队列 / Worker | 📨 | ⏳ |
+| 17 | V9 消息队列 / Worker | 📨 | ⏭️ 已跳过 |
 | 18 | V10 测试与工程化 | 📝 | ⏳ |
 | 19 | V11 Docker + Nginx + CI/CD | 🐳 | ⏳ |
 | 20 | V12 日志 / 监控 / Tracing | 📊 | ⏳ |
