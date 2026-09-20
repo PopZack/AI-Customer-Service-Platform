@@ -1,5 +1,6 @@
 #手动不提交git
-.trae/documents/
+.trae/
+.workbuddy/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
