@@ -581,7 +581,9 @@ function toast(msg, ms = 2600) {
   el._t = setTimeout(() => el.classList.remove('show'), ms);
 }
 
-async function api(path, opts = {}) {
+let refreshToken = localStorage.getItem('refresh') || '';
+
+async function api(path, opts = {}, _retried = false) {
   const headers = { ...(opts.headers || {}) };
   if (!(opts.body instanceof FormData)) headers['Content-Type'] = 'application/json';
   if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -590,11 +592,37 @@ async function api(path, opts = {}) {
   let json = null;
   try { json = await res.json(); } catch (_) { /* 非 JSON */ }
 
+  // access token 过期(30 分钟):用 refresh token 续签后重放原请求,用户无感。
+  // 只自动重放一次,防止 refresh 失效时死循环;认证接口本身不参与续签。
+  if (res.status === 401 && !path.startsWith('/auth/') && !_retried && refreshToken) {
+    const ok = await tryRefresh();
+    if (ok) return api(path, opts, true);
+    throw new Error('登录已过期,请重新登录');
+  }
+
   if (!res.ok || !json || json.code !== 0) {
     const msg = (json && json.message) || ('HTTP ' + res.status);
     throw new Error(msg);
   }
   return json.data;
+}
+
+async function tryRefresh() {
+  try {
+    const r = await fetch(API + '/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!r.ok) return false;
+    const j = await r.json();
+    if (j.code !== 0 || !j.data) return false;
+    token = j.data.access_token;
+    refreshToken = j.data.refresh_token;
+    localStorage.setItem('token', token);
+    localStorage.setItem('refresh', refreshToken);
+    return true;
+  } catch (_) { return false; }
 }
 
 function esc(s) {
@@ -637,7 +665,9 @@ async function doLogin() {
   try {
     const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
     token = data.access_token;
+    refreshToken = data.refresh_token || '';
     localStorage.setItem('token', token);
+    localStorage.setItem('refresh', refreshToken);
     setWho(username);
     toast('登录成功');
     switchTab('kb');
@@ -652,8 +682,18 @@ async function restoreSession() {
     setWho(me.username);
     await loadKbs();
   } catch (_) {
-    token = '';
+    // access 过期还有 refresh 兜底;都失效才算真的退出
+    if (refreshToken && await tryRefresh()) {
+      try {
+        const me = await api('/auth/me');
+        setWho(me.username);
+        await loadKbs();
+        return;
+      } catch (_) { /* fallthrough */ }
+    }
+    token = ''; refreshToken = '';
     localStorage.removeItem('token');
+    localStorage.removeItem('refresh');
     setWho('未登录');
   }
 }
@@ -704,6 +744,7 @@ async function uploadDoc() {
     toast(`已上传：${doc.file_name}，正在后台索引…`);
     input.value = '';
     document.getElementById('dropText').textContent = '点击选择 或 拖拽文件到这里';
+    // (上传已触发,上方文案复原)
     await loadDocs();
     startPolling(doc.id);
   } catch (e) { toast('上传失败：' + e.message); }
@@ -718,9 +759,13 @@ dz.addEventListener('drop', e => {
   if (!e.dataTransfer.files.length) return;
   document.getElementById('fileInput').files = e.dataTransfer.files;
   document.getElementById('dropText').textContent = '已选择：' + e.dataTransfer.files[0].name;
+  uploadDoc();
 });
 document.getElementById('fileInput').addEventListener('change', e => {
-  if (e.target.files.length) document.getElementById('dropText').textContent = '已选择：' + e.target.files[0].name;
+  if (e.target.files.length) {
+    document.getElementById('dropText').textContent = '已选择：' + e.target.files[0].name;
+    uploadDoc();   // 选完即传 —— 重设计时删了"上传并索引"按钮却没接这里,上传曾因此失联
+  }
 });
 
 const STATUS_TAG = {
