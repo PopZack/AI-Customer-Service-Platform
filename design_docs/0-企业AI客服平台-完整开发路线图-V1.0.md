@@ -905,28 +905,35 @@ Fallback
 
 ## 目前进度
 
-> 最后更新：2026-09-20
+> 最后更新：2026-09-21（项目收尾完成）
 
 ```
-✅ 第一阶段：PRD
-✅ 第二阶段：领域模型
-✅ 第三阶段：核心业务流程
-✅ 第四阶段：ER 模型
-✅ 第五阶段：数据库表结构
-✅ 第六阶段：系统架构
-✅ 第七阶段：API
-✅ 第八阶段：工程结构
+✅ 第一阶段～第八阶段：PRD / 领域模型 / 业务流程 / ER / 表结构 / 架构 / API / 工程结构
 ✅ V1：基础后端（第 9 阶段）
 ✅ V2：数据库（第 10 阶段）
 ✅ V3：认证与权限（第 11 阶段）
 ✅ V4：Redis + 异步（第 12 阶段）
 ✅ V5：LLM + AI Chat（第 13 阶段）
-⬜ V6：RAG 知识库（第 14 阶段）  ← 当前所处阶段
-⬜ V7～V14 实现
+✅ V6：RAG 知识库（第 14 阶段）—— pgvector + fastembed + 混合检索
+✅ V7：Agent + Tool（第 15 阶段）—— 流式工具循环 + 5 个工具
+✅ V8：AI + 人工协同（第 16 阶段）—— 会话状态机 + 工单闭环
+⏭️ V9：消息队列（第 17 阶段）—— 按精简决策跳过,用 BackgroundTasks
+✅ V10：测试与工程化（第 18 阶段）—— 73 个测试,ruff 全绿
+✅ V11：Docker + Nginx + CI/CD（第 19 阶段）—— 镜像自动发布 ghcr.io
+✅ V12：监控（第 20 阶段）—— 精简为 /metrics + 结构化日志;检索缓存;LLM fallback
+✅ V13：AI Evaluation（第 21 阶段）—— 24 条评测集,Recall@1 95% / faithfulness 96%
+✅ V14：生产级优化（第 22 阶段）—— 精简收尾,文档对齐
 ```
 
-**下一步：《第十四阶段：V6 RAG 知识库》。**
+**项目状态：核心路线全部完成。**
 
-收尾采用**精简路线**：V6 / V7 / V8 做满，V9 消息队列跳过（文档解析与 embedding 改用 FastAPI BackgroundTasks），V10～V14 按精简版收尾（补索引、检索缓存、LLM 重试与 fallback、小型评测集）。
+实现与设计文档的三处已知差异(均为实现期的有意修正):
+1. 关键词检索没有用 `tsvector`(中文需 zhparser 扩展,镜像没有),改用字符 bigram + pg_trgm。
+2. 流式对话前端用 fetch + ReadableStream 手工解析 SSE(EventSource 只支持 GET)。
+3. 工单权限用数据归属校验而非角色权限码(角色表未播种,强校验会让所有人 403)。
 
-技术选型已定：向量库用 **pgvector**（复用现有 PostgreSQL，不引入 Milvus），embedding 用 **fastembed 本地 ONNX 模型**（`BAAI/bge-small-zh-v1.5`，512 维，进程内推理，无需外部服务）。
+技术选型(已落地)：向量库 **pgvector**(本地构建镜像,不依赖 Docker Hub)、
+embedding **fastembed 本地 ONNX**(`BAAI/bge-small-zh-v1.5`,512 维,进程内推理)、
+LLM **方舟 Agent Plan**(端点 `/api/plan/v3`,模型 `ark-code-latest`)。
+
+评测结论与运维命令见 README。

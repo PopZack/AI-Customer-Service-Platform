@@ -13,7 +13,7 @@
 
 ## ✨ 功能亮点
 
-### 已实现（Phase 9-19）
+### 已实现（Phase 9-22，全部完成）
 
 | 能力 | 说明 | 阶段 |
 |---|---|---|
@@ -27,10 +27,13 @@
 | 👥 AI + 人工协同 | 会话状态机（AI→等待人工→人工接管→结束）/ 显式+隐式转人工 / 工单闭环 | Phase 16 |
 | 📝 测试与工程化 | 67 个测试（单元 + 集成，真实 PG/Redis/embedding）/ 生产 Dockerfile / GitHub Actions | Phase 18 |
 | 🐳 Docker + CI/CD | 全栈 compose 编排 + Nginx 反代（SSE 调优）/ 镜像自动发布 ghcr.io | Phase 19 |
+| 📊 监控（精简版） | 零依赖进程内计数器 + Prometheus 格式 `/metrics`；检索缓存（带数据版本失效）；LLM fallback | Phase 20 |
+| 🧪 RAG 评测 | 24 条评测集，Recall@1 95% / Recall@3 100% / faithfulness 96%（LLM 裁判） | Phase 21 |
 
-### 规划中（Phase 20-22，精简收尾）
+### 规划中
 
-检索缓存 + LLM 超时重试 → 评测集（Recall / faithfulness）→ 文档与现状对齐
+核心路线图（Phase 9-22）已全部完成（Phase 17 消息队列按精简决策跳过）。
+后续可扩展方向：多知识库权限隔离、OCR 支持（扫描版 PDF）、对象存储、完整监控接入。
 
 > 收尾采用**精简路线**：**Phase 17 消息队列跳过**（文档解析与 embedding 改用 FastAPI BackgroundTasks，本项目无高并发场景），Phase 18-22 按精简版收尾。
 
@@ -132,8 +135,8 @@ PostgreSQL 的全文检索**没有中文分词器**（需要 zhparser 扩展，�
 | 文档解析 | pymupdf（PDF）+ python-docx（DOCX） | Phase 14 |
 | 测试 | pytest + pytest-asyncio（真实 PG / Redis，仅 mock LLM） | 67 个用例 |
 | 代码规范 | ruff（check 已全绿） | 0.16+ |
-| CI | GitHub Actions（lint / test / build 三 job） | — |
-| 部署 | Docker Compose | Phase 19 |
+| CI | GitHub Actions（lint / test / build / release 四 job） | — |
+| 部署 | Docker Compose（开发态）+ prod 叠加文件（全栈） | Phase 19 |
 
 ---
 
@@ -367,6 +370,26 @@ data: {"type":"done","status":1}              ← 附带会话最新状态
 
 回答会基于知识库检索结果，并在正文里标注引用编号（如 `退款一般 3 到 5 个工作日到账[1]`）。
 
+### RAG 评测（Phase 21）
+
+`evals/` 内置 24 条评测集（20 知识题 + 4 拒答题）与评测脚本，语料索引、检索、生成全部走生产同款代码：
+
+```bash
+uv run python evals/run_eval.py          # 完整评测(需要 LLM key)
+uv run python evals/run_eval.py --skip-faithfulness   # 只测检索
+```
+
+首轮结果（模型 ark-code-latest / bge-small-zh-v1.5）：
+
+| 指标 | 结果 | 说明 |
+|---|---|---|
+| Recall@1 | **95%**（19/20） | 唯一漏检是两节语义相近（退款时效 vs 退换货流程）被挤到第 2 位 |
+| Recall@3 | **100%** | |
+| 拒答正确率 | 4/4 | 知识库外的问题不编造，明确说不知道并引导 |
+| faithfulness | **96%**（23/24） | LLM 裁判；唯一"编造"是模型在资料外补了一句常识建议（检查垃圾邮件文件夹）—— 提示词收紧的方向 |
+
+> ⚠️ 两点局限：① faithfulness 用同一个 LLM 当裁判有自我偏好，但它能稳定抓住"编造资料外信息"这类最危险的失败；② Agent Plan 模型非流式调用**偶发空输出**（疑似推理预算被吞），评测脚本已做"空输出 → 加大预算重试"，生产流式路径未观察到此问题。
+
 ### Knowledge — 知识库与 RAG（Phase 14）
 
 | 方法 | 端点 | 说明 |
@@ -515,7 +538,8 @@ AI-Customer-Service-Platform/
 │   ├── conftest.py             #   测试环境准备（切测试库、放开限流、关 SQL 回显）
 │   ├── unit/                   #   单元测试：Agent 循环、配置守卫（不需要外部服务）
 │   └── integration/            #   集成测试：真实 PG / Redis / embedding
-├── .github/workflows/ci.yml    # ✅ CI：lint / test / build
+├── evals/                      # ✅ RAG 评测：语料 + 24 条用例 + 脚本（Recall/faithfulness）
+├── .github/workflows/ci.yml    # ✅ CI：lint / test / build / release
 ├── Dockerfile                  # ✅ 生产镜像（多阶段、非 root、healthcheck）
 ├── .dockerignore
 ├── docker/
@@ -555,9 +579,9 @@ AI-Customer-Service-Platform/
 | 17 | V9 消息队列 / Worker | 📨 | ⏭️ 已跳过 |
 | 18 | V10 测试与工程化 | 📝 | ✅ |
 | 19 | V11 Docker + Nginx + CI/CD | 🐳 | ✅ |
-| 20 | V12 日志 / 监控 / Tracing | 📊 | ⏳ |
-| 21 | V13 AI Evaluation | 🧪 | ⏳ |
-| 22 | V14 生产级优化 | 🚀 | ⏳ |
+| 20 | V12 日志 / 监控 / Tracing | 📊 | ✅ 精简为 /metrics + 结构化日志 |
+| 21 | V13 AI Evaluation | 🧪 | ✅ 24 条评测集 |
+| 22 | V14 生产级优化 | 🚀 | ✅ 精简完成 |
 
 ---
 
