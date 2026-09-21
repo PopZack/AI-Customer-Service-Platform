@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.rag.cache import get_cached, set_cached
 from app.ai.rag.config import RETRIEVAL_CANDIDATES, RETRIEVAL_TOP_K, RRF_K
 from app.ai.rag.vector_store import vector_store
 from app.infrastructure.embedding import embed_query
@@ -120,9 +121,30 @@ async def retrieve(
 ) -> list[RetrievedChunk]:
     """混合检索主入口:向量 + 关键词 → RRF → top_k。
 
+    外层套了 Redis 结果缓存(Phase 20):相同查询直接回上次结果,
+    跳过 embedding 推理与双路 SQL。只缓存非空结果,Redis 不可用时
+    退化为直查 —— 缓存是提速,不是正确性前提。
+
     任何一路失败(如 embedding 模型未加载)不致命:降级为另一路的结果。
     两路都空则返回空列表(调用方据此走"无知识"分支)。
     """
+    cached = await get_cached(query, kb_ids, top_k)
+    if cached is not None:
+        logger.debug("检索缓存命中: %s", query[:40])
+        return cached
+
+    results = await _retrieve_uncached(session, query, kb_ids, top_k)
+    await set_cached(query, kb_ids, top_k, results)
+    return results
+
+
+async def _retrieve_uncached(
+    session: AsyncSession,
+    query: str,
+    kb_ids: list[int] | None,
+    top_k: int,
+) -> list[RetrievedChunk]:
+    """真正的混合检索(无缓存版)。"""
     details: dict[int, dict] = {}
     rankings: list[list[int]] = []
 

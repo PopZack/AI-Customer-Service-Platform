@@ -81,6 +81,16 @@ def create_app() -> FastAPI:
     async def _health():
         return {"status": "ok"}
 
+    # Prometheus 文本格式的进程内计数器(Phase 20 精简版监控)。
+    # 抓取端直接配这个路径;要接完整监控系统时无需改业务代码。
+    from fastapi import Response
+
+    from app.common.metrics import render
+
+    @app.get("/metrics", tags=["Health"], include_in_schema=False)
+    async def _metrics():
+        return Response(content=render(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
     # 静态演示页(第 14 阶段 M1)。目录不存在时跳过,不影响 API 启动。
     static_dir = Path(__file__).resolve().parent.parent / "static"
     if static_dir.is_dir():

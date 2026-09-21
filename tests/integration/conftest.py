@@ -117,7 +117,9 @@ async def _truncate_tables(_infra):
     # 上一条用例遗留的计数就会被算进来 —— 表现为"莫名其妙提前转人工"的偶发失败。
     try:
         redis = await get_redis()
+        # chat:* 是隐式转人工计数;rag:* 是检索结果缓存(避免跨用例假命中)
         keys = [k async for k in redis.scan_iter(match="chat:*")]
+        keys += [k async for k in redis.scan_iter(match="rag:*")]
         if keys:
             await redis.delete(*keys)
     except Exception as exc:  # noqa: BLE001 —— Redis 不可用不影响数据库清理

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from sqlalchemy import delete
 
+from app.ai.rag.cache import bump_version
 from app.ai.rag.chunker import split_text
 from app.ai.rag.config import EMBEDDING_MODEL_NAME
 from app.ai.rag.parser import UnsupportedFileTypeError, extract_text
@@ -133,3 +134,7 @@ async def process_document(document_id: int) -> None:
     except Exception as e:
         await _set_status(document_id, DocumentStatus.FAILED, f"{type(e).__name__}: {e}")
         logger.exception("文档 %s 索引失败", document_id)
+    finally:
+        # 无论成败,只要跑过索引,块的内容/向量就可能变过 —— 检索缓存全部作废。
+        # (旧键不删,靠 TTL 过期;新版本号的键从现在起才写。)
+        await bump_version()

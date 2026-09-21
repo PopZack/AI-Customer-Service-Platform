@@ -10,6 +10,7 @@ from uuid import uuid4
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.rag.cache import bump_version
 from app.ai.rag.config import SUPPORTED_EXTENSIONS
 from app.ai.rag.retriever import retrieve
 from app.common.exceptions.handler import AppException
@@ -128,6 +129,8 @@ class KnowledgeService:
         await self.chunk_repo.delete_by_document(document_id)
         await self.doc_repo.delete(doc)
         await self.session.commit()
+        # 检索缓存即刻失效,防止删掉的文档在 TTL 内仍能搜到(测试抓出的问题)
+        await bump_version()
 
         if storage_path:
             try:

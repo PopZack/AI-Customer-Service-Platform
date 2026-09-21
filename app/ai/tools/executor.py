@@ -25,6 +25,7 @@ from app.ai.tools.definitions import (
     HANDOFF_TO_HUMAN,
     SEARCH_KNOWLEDGE,
 )
+from app.common import metrics
 from app.models.conversation import Conversation, ConversationStatus, Message
 from app.models.ticket import Ticket, TicketMessage, TicketPriority, TicketStatus
 from app.models.user_system import User
@@ -57,6 +58,7 @@ class ToolResult:
 
 async def execute_tool(name: str, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
     """按名字分派执行工具。未知工具/参数错误都返回 ok=False 的文本,不抛异常。"""
+    metrics.inc("tool_calls_total", tool=name)
     try:
         if name == SEARCH_KNOWLEDGE:
             return await _search_knowledge(ctx, arguments)

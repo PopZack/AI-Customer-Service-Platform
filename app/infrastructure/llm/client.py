@@ -1,7 +1,16 @@
 """LLM 异步客户端:OpenAI 兼容接口,支持流式输出。
 
 镜像 Redis client 的模式:全局单例 + init/close/get_llm + 依赖注入。
+
+Phase 20 加固:
+- 重试交给 openai SDK 的内建机制(max_retries 可配):它对连接错误、
+  408/429/5xx 做指数退避,自己再包一层纯属重复。
+- **fallback 模型**:主模型在 SDK 重试耗尽后仍失败,且配置了
+  LLM_FALLBACK_MODEL 时,换备用模型再试一次。fallback 只发生在
+  **请求建立阶段**(create 调用返回前),流已开始后不再换模型 ——
+  中途换模型等于把前半段回答作废,用户看到的是跳变,不如直接报错。
 """
+import logging
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
@@ -12,7 +21,10 @@ from openai.types.chat import (
     ChatCompletionStreamOptionsParam,
 )
 
+from app.common import metrics
 from app.config.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -47,10 +59,35 @@ def _build_client() -> AsyncOpenAI | None:
     """根据配置构建 AsyncOpenAI 客户端。未配置则返回 None(开发阶段可降级)。"""
     if not settings.LLM_API_KEY:
         return None
-    kwargs: dict = {"api_key": settings.LLM_API_KEY}
+    kwargs: dict = {
+        "api_key": settings.LLM_API_KEY,
+        # SDK 内建重试:连接错误、408/409/429、>=500 指数退避。显式声明便于配置。
+        "max_retries": settings.LLM_MAX_RETRIES,
+    }
     if settings.LLM_BASE_URL:
         kwargs["base_url"] = settings.LLM_BASE_URL
     return AsyncOpenAI(**kwargs)
+
+
+async def _create_with_fallback(client: AsyncOpenAI, kwargs: dict[str, Any]):
+    """发起一次 create;主模型重试耗尽仍失败且配置了备用模型时,换模型再试。
+
+    只覆盖**请求建立阶段**。对流式调用,create 返回时流尚未开始消费,
+    在这里换模型是安全的;流中途的失败不重试(见模块 docstring)。
+    """
+    try:
+        return await client.chat.completions.create(**kwargs)
+    except Exception as primary_err:
+        fallback = settings.LLM_FALLBACK_MODEL
+        if not fallback or fallback == kwargs.get("model"):
+            raise
+        metrics.inc("llm_fallback_total", model=fallback)
+        logger.warning(
+            "主模型 %s 失败(%s),切换备用模型 %s 重试",
+            kwargs.get("model"), type(primary_err).__name__, fallback,
+        )
+        fb_kwargs = {**kwargs, "model": fallback}
+        return await client.chat.completions.create(**fb_kwargs)
 
 
 async def init_llm() -> None:
@@ -93,12 +130,15 @@ async def chat_non_stream(
 ) -> str:
     """非流式聊天:一次性返回完整文本。"""
     client = await get_llm()
-    resp = await client.chat.completions.create(
-        model=model or settings.LLM_MODEL,
-        messages=messages,
-        temperature=temperature or settings.LLM_TEMPERATURE,
-        max_tokens=max_tokens or settings.LLM_MAX_TOKENS,
-        timeout=settings.LLM_TIMEOUT,
+    resp = await _create_with_fallback(
+        client,
+        {
+            "model": model or settings.LLM_MODEL,
+            "messages": messages,
+            "temperature": temperature or settings.LLM_TEMPERATURE,
+            "max_tokens": max_tokens or settings.LLM_MAX_TOKENS,
+            "timeout": settings.LLM_TIMEOUT,
+        },
     )
     return resp.choices[0].message.content or ""
 
@@ -113,14 +153,17 @@ async def chat_stream(
     """流式聊天:逐 chunk yield 文本增量。"""
     client = await get_llm()
     stream_options: ChatCompletionStreamOptionsParam = {"include_usage": False}
-    stream = await client.chat.completions.create(
-        model=model or settings.LLM_MODEL,
-        messages=messages,
-        temperature=temperature or settings.LLM_TEMPERATURE,
-        max_tokens=max_tokens or settings.LLM_MAX_TOKENS,
-        timeout=settings.LLM_TIMEOUT,
-        stream=True,
-        stream_options=stream_options,
+    stream = await _create_with_fallback(
+        client,
+        {
+            "model": model or settings.LLM_MODEL,
+            "messages": messages,
+            "temperature": temperature or settings.LLM_TEMPERATURE,
+            "max_tokens": max_tokens or settings.LLM_MAX_TOKENS,
+            "timeout": settings.LLM_TIMEOUT,
+            "stream": True,
+            "stream_options": stream_options,
+        },
     )
     async for chunk in stream:
         if not chunk.choices:
@@ -160,7 +203,7 @@ async def chat_stream_with_tools(
         # 明确要求"由模型自行决定是否调用",避免部分厂商默认强制调用工具
         kwargs["tool_choice"] = "auto"
 
-    stream = await client.chat.completions.create(**kwargs)
+    stream = await _create_with_fallback(client, kwargs)
 
     async for chunk in stream:
         if not chunk.choices:

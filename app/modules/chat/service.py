@@ -27,6 +27,7 @@ from app.ai.prompt.system import build_rag_system_prompt, get_system_prompt
 from app.ai.rag.config import MAX_CONTEXT_CHARS, RETRIEVAL_TOP_K
 from app.ai.rag.retriever import build_context_block, retrieve
 from app.ai.tools import ToolContext, request_handoff
+from app.common import metrics
 from app.common.exceptions.handler import AppException
 from app.config.settings import get_settings
 from app.infrastructure.llm import is_llm_available
@@ -132,6 +133,8 @@ class ChatService:
         LLM 可用性的检查**放在"确实需要 AI 作答"之后** —— 已转人工的会话
         不该因为 LLM 没配就报错,那条分支根本不经过模型。
         """
+        metrics.inc("chat_requests_total")
+
         # 1. 校验会话
         conv = await self.conv_repo.get_by_id(req.conversation_id)
         if conv is None:
@@ -157,6 +160,7 @@ class ChatService:
 
         # 4. 需要 AI 作答,才要求 LLM 可用
         if not is_llm_available():
+            metrics.inc("chat_llm_unavailable_total")
             raise AppException(503, "LLM 未配置,无法进行 AI 聊天", http_status=503)
 
         # 5. 拼 prompt(RAG 预注入:常见问答题不必多花一次工具往返)
@@ -189,6 +193,7 @@ class ChatService:
         await self.session.refresh(conv)
         ticket_id = agent.ticket_created
         if agent.handoff_requested:
+            metrics.inc("chat_handoffs_total", reason="tool")
             yield ChatEvent(
                 type="handoff",
                 status=ConversationStatus.WAITING_HUMAN,
@@ -197,6 +202,7 @@ class ChatService:
             )
             await reset(conv.id)
         elif conv.status not in ConversationStatus.HUMAN_SIDE and await should_handoff_implicitly(conv.id):
+            metrics.inc("chat_handoffs_total", reason="implicit_empty_retrieval")
             result = await request_handoff(
                 ToolContext(session=self.session, conversation_id=conv.id, user=user),
                 reason=f"连续 {IMPLICIT_HANDOFF_THRESHOLD} 次未在知识库检索到相关资料",
@@ -232,6 +238,7 @@ class ChatService:
             ToolContext(session=self.session, conversation_id=conv.id, user=user),
             reason=reason.strip() or f"用户 {user.username if user else '匿名'} 主动请求人工客服",
         )
+        metrics.inc("chat_handoffs_total", reason="explicit_button")
         if not result.ok:
             raise AppException(400, result.content)
 

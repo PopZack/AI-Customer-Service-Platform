@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     LLM_MAX_TOKENS: int = 2048
     LLM_TEMPERATURE: float = 0.7
     LLM_TIMEOUT: float = 30.0
+    # openai SDK 的内建重试次数(连接错误、408/409/429、>=500 指数退避)
+    LLM_MAX_RETRIES: int = 2
+    # 备用模型:主模型重试耗尽仍失败时换它再试一次;留空 = 不启用 fallback
+    LLM_FALLBACK_MODEL: str = ""
     LLM_SYSTEM_PROMPT: str = "你是企业级 AI 客服助手,请专业、礼貌、准确地回答用户问题。"
     LLM_MAX_CONTEXT_MESSAGES: int = 20  # 每次最多带入的历史消息数
 
@@ -66,6 +70,8 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./data/uploads"
     MAX_UPLOAD_MB: int = 20  # 单文件大小上限
     EMBED_BATCH_SIZE: int = 64  # 向量化批大小(单批过大时 ONNX 推理内存会飙升)
+    # 检索结果缓存 TTL(秒)。只缓存非空结果;0 = 关闭缓存
+    RETRIEVAL_CACHE_TTL: int = 3600
 
 
     @model_validator(mode="after")
