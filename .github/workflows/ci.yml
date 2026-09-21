@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同一分支连续推送时取消上一次未跑完的任务，省额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 不用 .env（含密钥，不入库）。测试直接从环境变量读配置。
+  PYTHONDONTWRITEBYTECODE: "1"
+  UV_LINK_MODE: copy
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 安装依赖
+        run: uv sync --frozen --extra dev
+
+      - name: ruff check
+        run: uv run ruff check .
+
+  test:
+    name: Test (pytest)
+    runs-on: ubuntu-latest
+    needs: lint
+
+    services:
+      # 必须用 pgvector 镜像：迁移里会 CREATE EXTENSION vector / pg_trgm
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ai_cs
+          POSTGRES_PASSWORD: ai_cs_pwd
+          POSTGRES_DB: ai_customer_service
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ai_cs -d ai_customer_service"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://ai_cs:ai_cs_pwd@localhost:5432/ai_customer_service
+      REDIS_URL: redis://localhost:6379/0
+      # JWT 密钥：不给会退化成默认值 "change_me"，PyJWT 会对每个 token 发弱密钥告警
+      # （实测 74 条），而且这正是生产上最危险的配置之一。
+      JWT_SECRET: ci-only-secret-please-set-a-real-one-in-production-0123456789
+      # ⚠️ 必须给一组"看起来合法"的 LLM 配置：chat 接口会先检查 is_llm_available()，
+      # 拿不到客户端就直接 503，聊天相关的用例会全部失败。
+      # 测试里的模型调用都被假客户端替换掉了，这里不会真的发出请求。
+      LLM_API_KEY: ci-dummy-key-not-used
+      LLM_BASE_URL: https://llm.invalid/v1
+      LLM_MODEL: deepseek-chat
+      DEBUG: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 安装依赖
+        run: uv sync --frozen --extra dev
+
+      # embedding 模型约 90MB，缓存起来避免每次重新下载
+      - name: 缓存 embedding 模型
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed_cache
+          key: fastembed-bge-small-zh-v1.5
+
+      - name: 跑迁移（验证迁移脚本本身可用）
+        run: uv run alembic upgrade head
+
+      - name: 跑测试
+        # 测试自己会重建独立的 <库名>_test 数据库，不会污染上面的 ai_customer_service
+        run: uv run pytest -q
+
+  build:
+    name: Build (docker)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 构建镜像
+        # 只验证能构建，不推送。本机 Docker Hub 不可达，这一步是镜像真正的验证途径。
+        run: docker build -t ai-customer-service:ci .
