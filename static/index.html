@@ -909,7 +909,9 @@ async function sendMessage() {
       throw new Error((j && j.message) || ('HTTP ' + res.status));
     }
 
-    // 手写 SSE 帧解析:EventSource 只支持 GET,而 /chat 是 POST
+    // 手写 SSE 帧解析:EventSource 只支持 GET,而 /chat 是 POST。
+    // ⚠️ 帧分隔必须兼容 \r\n —— sse-starlette 默认用 \r\n(遵循 SSE 规范),
+    // 只按 \n\n 切帧的话一个事件都收不到(实踩:后端明明回答了,前端全是空)。
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
@@ -918,11 +920,12 @@ async function sendMessage() {
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) !== -1) {
-        const frame = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const line = frame.split('\n').find(l => l.startsWith('data:'));
+      while (true) {
+        const sep = buf.match(/\r?\n\r?\n/);
+        if (!sep) break;
+        const frame = buf.slice(0, sep.index);
+        buf = buf.slice(sep.index + sep[0].length);
+        const line = frame.split(/\r?\n/).find(l => l.startsWith('data:'));
         if (!line) continue;
         let evt;
         try { evt = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }

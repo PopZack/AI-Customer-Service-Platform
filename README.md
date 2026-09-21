@@ -8,6 +8,40 @@
 [![Redis](https://img.shields.io/badge/Redis-7-red)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED)](https://www.docker.com/)
 [![CI](https://github.com/PopZack/AI-Customer-Service-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/PopZack/AI-Customer-Service-Platform/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache--2.0-orange)](./LICENSE)
+
+`🧪 77 tests` · `🎯 RAG Recall@1 95%` · `🐳 ghcr.io 镜像` · `📋 22 阶段路线全完成`
+
+![AI 对话 —— 流式输出与引用标注](docs/screenshots/chat-dark.png)
+
+<details>
+<summary><b>更多截图</b></summary>
+
+| 知识库（拖拽上传 + 索引进度） | 工单台（客服视角） |
+|---|---|
+| ![知识库](docs/screenshots/kb-dark.png) | ![工单台](docs/screenshots/ticket-dark.png) |
+
+亮色主题：
+
+![亮色主题](docs/screenshots/chat-light.png)
+
+</details>
+
+---
+
+## 📑 目录
+
+- [✨ 功能亮点](#-功能亮点)
+- [🧠 设计思路](#-设计思路)
+- [🛠️ 技术栈](#-技术栈)
+- [🚀 快速开始](#-快速开始)
+- [📡 API 概览](#-api-概览)
+- [🔬 RAG 评测](#rag-评测phase-21)
+- [📂 项目结构](#-项目结构)
+- [🗺️ 开发进度](#-开发进度)
+- [🤝 参与贡献](#-参与贡献)
+- [📄 License](#-license)
+- [📖 设计文档](#-设计文档)
 
 ---
 
@@ -56,12 +90,19 @@
 
 ### 三层架构
 
-```
-Router（薄，只做参数解析）
-  ↓
-Service（业务逻辑，唯一入口）
-  ↓
-Repository（CRUD + 查询，Service 唯一的数据访问通道）
+```mermaid
+flowchart TD
+    R["Router<br/>薄，只做参数解析"] --> S["Service<br/>业务逻辑，唯一入口"]
+    S --> Repo["Repository<br/>CRUD + 查询，唯一数据访问通道"]
+    Repo --> PG[("PostgreSQL + pgvector")]
+    S -.-> BGT["BackgroundTasks<br/>文档解析 → 切块 → 向量化"]
+    S -.-> RD[("Redis<br/>限流 / 缓存 / 转人工计数")]
+    R -.->|"AI 请求"| AI["app/ai/*<br/>Agent · RAG · Tools"]
+    AI --> LLM["LLM API<br/>OpenAI 兼容"]
+    AI --> EMB["fastembed<br/>本地 ONNX"]
+    style R fill:#6d7cff,color:#fff
+    style S fill:#22d3ee,color:#fff
+    style Repo fill:#34d399,color:#fff
 ```
 
 外加 **Infrastructure** 层隔离外部技术细节（数据库 / Redis / pgvector / LLM / embedding），业务代码不直接碰 `redis.set(...)`、`pg.query(...)`、`llm.stream(...)`、`model.embed(...)`。
@@ -608,6 +649,12 @@ AI-Customer-Service-Platform/
 
 ---
 
+## 🤝 参与贡献
+
+欢迎 issue 交流与 PR。环境搭建、自查清单与项目约定见 **[CONTRIBUTING.md](./CONTRIBUTING.md)**。
+
+三条最容易被拒的红线：`ruff check` 非全绿、测试只 mock 了 LLM 以外的组件、绕过 `enqueue_document()` 直接入队。
+
 ## 📝 License
 
-MIT
+[Apache-2.0](./LICENSE) —— 可自由使用、修改与分发，含明确的专利授权条款。
