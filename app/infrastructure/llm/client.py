@@ -2,16 +2,45 @@
 
 镜像 Redis client 的模式:全局单例 + init/close/get_llm + 依赖注入。
 """
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from dataclasses import dataclass
+from typing import Any
 
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionStreamOptionsParam
+from openai.types.chat import (
+    ChatCompletionMessageParam,
+    ChatCompletionStreamOptionsParam,
+)
 
 from app.config.settings import get_settings
 
 settings = get_settings()
 
 _client: AsyncOpenAI | None = None
+
+
+@dataclass
+class ToolCallDelta:
+    """流式返回中工具调用的一个增量片段。
+
+    OpenAI 兼容接口把一次工具调用拆成多个 chunk 陆续下发:
+    id 与函数名通常只在第一个 chunk 出现,arguments 是被切成多段的 JSON 字符串。
+    所以调用方必须**按 index 累积**,不能指望单个 chunk 拿到完整信息。
+    """
+
+    index: int
+    id: str | None = None
+    name: str | None = None
+    arguments: str | None = None
+
+
+@dataclass
+class StreamChunk:
+    """流式响应的一块(已抹平各厂商差异)。"""
+
+    content: str | None = None
+    tool_call: ToolCallDelta | None = None
+    finish_reason: str | None = None
 
 
 def _build_client() -> AsyncOpenAI | None:
@@ -99,3 +128,58 @@ async def chat_stream(
         delta = chunk.choices[0].delta
         if delta.content:
             yield delta.content
+
+
+async def chat_stream_with_tools(
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> AsyncGenerator[StreamChunk, None]:
+    """流式聊天,支持工具调用。逐块 yield StreamChunk。
+
+    为什么用流式而不是非流式做工具轮:非流式要等整轮生成完才返回,
+    多轮工具调用会让用户干等几十秒。流式下模型开口的思考文字可以先推给用户,
+    工具调用增量则按 index 累积到完整再执行。
+    """
+    client = await get_llm()
+    stream_options: ChatCompletionStreamOptionsParam = {"include_usage": False}
+    kwargs: dict[str, Any] = {
+        "model": model or settings.LLM_MODEL,
+        "messages": messages,
+        "temperature": temperature or settings.LLM_TEMPERATURE,
+        "max_tokens": max_tokens or settings.LLM_MAX_TOKENS,
+        "timeout": settings.LLM_TIMEOUT,
+        "stream": True,
+        "stream_options": stream_options,
+    }
+    if tools:
+        kwargs["tools"] = tools
+        # 明确要求"由模型自行决定是否调用",避免部分厂商默认强制调用工具
+        kwargs["tool_choice"] = "auto"
+
+    stream = await client.chat.completions.create(**kwargs)
+
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+        choice = chunk.choices[0]
+        delta = choice.delta
+
+        if delta.content:
+            yield StreamChunk(content=delta.content)
+
+        for tc in delta.tool_calls or []:
+            yield StreamChunk(
+                tool_call=ToolCallDelta(
+                    index=tc.index,
+                    id=tc.id,
+                    name=tc.function.name if tc.function else None,
+                    arguments=tc.function.arguments if tc.function else None,
+                )
+            )
+
+        if choice.finish_reason:
+            yield StreamChunk(finish_reason=choice.finish_reason)

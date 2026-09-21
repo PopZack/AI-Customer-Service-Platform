@@ -1,4 +1,4 @@
-"""Chat 路由:会话 CRUD + AI 聊天(SSE 流式)。
+"""Chat 路由:会话 CRUD + AI 聊天(SSE 流式)+ 转人工。
 
 拆成两个 router,在 api/router.py 中分别挂载:
 - conversations_router → /api/v1/conversations
@@ -8,26 +8,37 @@ SSE 端点注意事项:
 - EventSourceResponse 返回后,FastAPI 依赖注入会关闭 session
 - 因此 SSE 内部用 async_session_factory 创建独立 session,由 generator 自己管理生命周期
 - 流式结束后用该 session 保存 AI 回复,不会被提前关闭
+
+依赖注入统一用 Annotated 形式(与 knowledge 路由一致),避免 ruff 的 B008。
 """
 import json
+from dataclasses import asdict
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
 from app.api.dependencies import get_current_user, get_db_session
 from app.common.exceptions.handler import AppException
 from app.common.response.base import ResponseBase, success
 from app.infrastructure.database.session import async_session_factory
 from app.infrastructure.llm import is_llm_available
+from app.models.conversation import ConversationStatus
+from app.models.user_system import User
 from app.modules.chat.repository.chat_repository import MessageRepository
 from app.modules.chat.schemas import (
     ChatRequest,
     ConversationCreateRequest,
     ConversationResponse,
+    HandoffRequest,
+    HandoffResponse,
     MessageListResponse,
 )
-from app.modules.chat.service import ChatService
+from app.modules.chat.service import ChatEvent, ChatService
+
+DbSession = Annotated[AsyncSession, Depends(get_db_session)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
 # ── 会话 CRUD router(挂 /conversations 前缀) ───────────
 conversations_router = APIRouter()
@@ -35,147 +46,151 @@ conversations_router = APIRouter()
 
 @conversations_router.post("", response_model=ResponseBase[ConversationResponse])
 async def create_conversation(
-    req: ConversationCreateRequest,
-    db: AsyncSession = Depends(get_db_session),
-    current_user=Depends(get_current_user),
+    req: ConversationCreateRequest, db: DbSession, current_user: CurrentUser
 ):
     """创建新会话。"""
     service = ChatService(db)
-    user_id = current_user.id if current_user else None
-    result = await service.create_conversation(user_id, req)
-    return success(result)
+    return success(await service.create_conversation(current_user.id, req))
 
 
 @conversations_router.get("", response_model=ResponseBase[list[ConversationResponse]])
-async def list_conversations(
-    db: AsyncSession = Depends(get_db_session),
-    current_user=Depends(get_current_user),
-):
+async def list_conversations(db: DbSession, current_user: CurrentUser):
     """查询当前用户的会话列表。"""
     service = ChatService(db)
-    user_id = current_user.id if current_user else None
-    result = await service.list_conversations(user_id)
-    return success(result)
+    return success(await service.list_conversations(current_user.id))
 
 
-@conversations_router.get(
-    "/{conversation_id}", response_model=ResponseBase[ConversationResponse]
-)
-async def get_conversation(
-    conversation_id: int,
-    db: AsyncSession = Depends(get_db_session),
-    current_user=Depends(get_current_user),
-):
-    """查询会话详情。"""
+@conversations_router.get("/{conversation_id}", response_model=ResponseBase[ConversationResponse])
+async def get_conversation(conversation_id: int, db: DbSession, current_user: CurrentUser):
+    """查询会话详情(含状态机状态)。"""
     service = ChatService(db)
-    result = await service.get_conversation(conversation_id)
-    return success(result)
+    return success(await service.get_conversation(conversation_id))
 
 
 @conversations_router.get(
-    "/{conversation_id}/messages",
-    response_model=ResponseBase[MessageListResponse],
+    "/{conversation_id}/messages", response_model=ResponseBase[MessageListResponse]
 )
-async def list_messages(
-    conversation_id: int,
-    db: AsyncSession = Depends(get_db_session),
-    current_user=Depends(get_current_user),
-):
+async def list_messages(conversation_id: int, db: DbSession, current_user: CurrentUser):
     """查询会话的消息列表。"""
     service = ChatService(db)
     items = await service.list_messages(conversation_id)
     return success(MessageListResponse(items=items))
 
 
+# ── 转人工 ──────────────────────────────────────────────
+
+
+@conversations_router.post(
+    "/{conversation_id}/handoff", response_model=ResponseBase[HandoffResponse]
+)
+async def handoff_conversation(
+    conversation_id: int,
+    req: HandoffRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """显式转人工(用户点「转人工」按钮)。
+
+    与 AI 自己判断的隐式转人工共用同一套落库逻辑:会话置为「等待人工」
+    + 落 system 消息 + 保证有工单可追。
+    """
+    service = ChatService(db)
+    result = await service.handoff(current_user.id, conversation_id, req.reason or "")
+    return success(HandoffResponse(**result))
+
+
+@conversations_router.get(
+    "/{conversation_id}/handoff-signal", response_model=ResponseBase[dict]
+)
+async def get_handoff_signal(conversation_id: int, db: DbSession, current_user: CurrentUser):
+    """查看转人工判定信号(连续空检索次数 / 阈值),用于调试与前端展示。"""
+    service = ChatService(db)
+    return success(await service.get_handoff_signal(conversation_id))
+
+
 # ── AI 聊天 router(挂 /chat 前缀) ───────────────────────
 chat_router = APIRouter()
 
 
-# 错误标记(与 service.chat 配合)
-_ERROR_PREFIX = "[AI_ERROR]"
-_ERROR_SUFFIX = "[/AI_ERROR]"
-
-
 @chat_router.post("")
-async def chat(
-    req: ChatRequest,
-    db: AsyncSession = Depends(get_db_session),
-    current_user=Depends(get_current_user),
-):
+async def chat(req: ChatRequest, db: DbSession, current_user: CurrentUser):
     """AI 聊天接口(SSE 流式输出)。
 
-    前端通过 EventSource 接收事件流,事件类型:
-        - {"type":"start"}             — 流开始
-        - {"type":"content","content": "..."} — 内容增量
-        - {"type":"error","message": "..."}   — 流式中途出错
-        - {"type":"done"}              — 流结束
+    注意:本接口是 **POST**,浏览器的 EventSource 只支持 GET,
+    前端需用 fetch + ReadableStream 手工解析 SSE 帧(见 static/index.html)。
+
+    事件类型(data 字段的 type):
+        - start                        — 流开始
+        - content      {content}       — 内容增量
+        - tool_start   {tool, content} — 开始执行工具(前端可显示"正在检索知识库…")
+        - tool_end     {tool}          — 工具执行结束
+        - notice       {content}       — 提示信息(如已达工具轮数上限)
+        - handoff      {status, ticket_id, content} — 已转人工
+        - error        {message}       — 流式中途出错
+        - done         {status}        — 流结束,附带会话最新状态
     """
-    # 提前校验:LLM 不可用直接抛 503(避免 SSE 吞异常)
-    if not is_llm_available():
+    # 先确认会话存在且是否需要 AI 作答 —— 顺序很重要:
+    # 已转人工的会话,AI 本就不该回答,此时报"LLM 未配置"是错的;
+    # 而且这条分支不经过 LLM,不该被 LLM 可用性拦住。
+    conv = await ChatService(db).get_conversation(req.conversation_id)
+    if conv.status not in ConversationStatus.HUMAN_SIDE and not is_llm_available():
         raise AppException(503, "LLM 未配置,无法进行 AI 聊天", http_status=503)
 
-    user_id = current_user.id if current_user else None
+    user_id = current_user.id
+
+    def _sse(event: ChatEvent) -> dict:
+        # reply 是给本函数落库用的完整回答,内容已经通过 content 事件流式推过,
+        # 不必再重复发一遍(长回答会凭空多出一倍负载)
+        payload = asdict(event)
+        payload.pop("reply", None)
+        return {"event": "chat", "data": json.dumps(payload, ensure_ascii=False)}
 
     async def event_generator():
         # 必须用独立 session!
-        # EventSourceResponse 返回后,FastAPI 依赖注入会关闭 db session,
-        # 但 AI 回复需要在流式结束后保存,所以这里自己创建 session。
+        # EventSourceResponse 返回后,FastAPI 依赖注入会关闭请求 session,
+        # 但 AI 回复与工具副作用需要在流式过程中/结束后落库。
         async with async_session_factory() as sse_session:
             service = ChatService(sse_session)
 
-            # 先推送 start 事件
             yield {"event": "chat", "data": json.dumps({"type": "start"})}
 
-            # 流式推送内容增量 + 收集完整回复
-            full_reply_parts: list[str] = []
+            full_reply = ""
             has_error = False
+            final_status: int | None = None
+            done_sent = False
 
             try:
-                async for chunk in service.chat(user_id, req):
-                    # 检测错误标记
-                    if chunk.startswith(_ERROR_PREFIX) and chunk.endswith(_ERROR_SUFFIX):
-                        has_error = True
-                        error_msg = chunk[len(_ERROR_PREFIX) : -len(_ERROR_SUFFIX)]
-                        yield {
-                            "event": "chat",
-                            "data": json.dumps(
-                                {"type": "error", "message": error_msg},
-                                ensure_ascii=False,
-                            ),
-                        }
-                        break
-
-                    full_reply_parts.append(chunk)
-                    yield {
-                        "event": "chat",
-                        "data": json.dumps(
-                            {"type": "content", "content": chunk}, ensure_ascii=False
-                        ),
-                    }
-            except Exception as e:
+                async for event in service.chat(user_id, req):
+                    if event.type == "done":
+                        final_status = event.status
+                        full_reply = event.reply or full_reply
+                        done_sent = True
+                    yield _sse(event)
+            except Exception as e:  # noqa: BLE001 —— 必须转成 SSE error 事件,不能中断流
                 has_error = True
+                error_payload = {"type": "error", "message": str(e)}
+                yield {"event": "chat", "data": json.dumps(error_payload, ensure_ascii=False)}
+
+            # 流式结束后保存 AI 回复(出错时不保存,避免存半句话)
+            if not has_error and full_reply.strip():
+                msg_repo = MessageRepository(sse_session)
+                await msg_repo.create(
+                    conversation_id=req.conversation_id,
+                    sender_type="ai",
+                    sender_id=None,
+                    content=full_reply.strip(),
+                )
+                await sse_session.commit()
+
+            # service 正常收尾时已经发过 done,这里只在异常/未收尾时兜底,
+            # 避免前端收到两个 done 事件
+            if not done_sent:
                 yield {
                     "event": "chat",
                     "data": json.dumps(
-                        {"type": "error", "message": str(e)}, ensure_ascii=False
+                        {"type": "done", "status": final_status}, ensure_ascii=False
                     ),
                 }
-
-            # 流式结束后保存 AI 回复(仅当没有出错且有内容时)
-            if not has_error:
-                full_reply = "".join(full_reply_parts).strip()
-                if full_reply:
-                    msg_repo = MessageRepository(sse_session)
-                    await msg_repo.create(
-                        conversation_id=req.conversation_id,
-                        sender_type="ai",
-                        sender_id=None,
-                        content=full_reply,
-                    )
-                    await sse_session.commit()
-
-            # 结束事件
-            yield {"event": "chat", "data": json.dumps({"type": "done"})}
 
     return EventSourceResponse(event_generator())
 

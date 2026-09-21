@@ -7,7 +7,7 @@
 - app.common.security.token_blacklist:refresh token Redis 黑名单
 - app.common.exceptions.handler.AppException:统一业务异常
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -115,7 +115,7 @@ class AuthService:
         # 轮换:立即吊销旧 refresh(TTL=剩余寿命,过期后 key 自动清理)
         exp_ts = payload.get("exp")
         if exp_ts is not None:
-            ttl = int(exp_ts - datetime.now(timezone.utc).timestamp())
+            ttl = int(exp_ts - datetime.now(UTC).timestamp())
             await self.blacklist.revoke_refresh(jti, ttl_seconds=ttl)
 
         # 查库确认用户仍存在且未禁用
@@ -165,7 +165,7 @@ class AuthService:
 
         exp_ts = payload.get("exp")
         ttl = (
-            int(exp_ts - datetime.now(timezone.utc).timestamp())
+            int(exp_ts - datetime.now(UTC).timestamp())
             if exp_ts is not None
             else 0
         )
