@@ -25,7 +25,7 @@
 | 📚 RAG 知识库 | 文档上传解析切块 / 本地 embedding / pgvector 入库 / 混合检索 / 带引用回答 | Phase 14 |
 | 🛠️ Agent + Tool | 5 个工具的 function calling：检索 / 查工单 / 建单 / 转人工 / 查用户资料 | Phase 15 |
 | 👥 AI + 人工协同 | 会话状态机（AI→等待人工→人工接管→结束）/ 显式+隐式转人工 / 工单闭环 | Phase 16 |
-| 📝 测试与工程化 | 67 个测试（单元 + 集成，真实 PG/Redis/embedding）/ 生产 Dockerfile / GitHub Actions | Phase 18 |
+| 📝 测试与工程化 | 77 个测试（21 单元 + 56 集成，真实 PG/Redis/embedding）/ 生产 Dockerfile / GitHub Actions | Phase 18 |
 | 🐳 Docker + CI/CD | 全栈 compose 编排 + Nginx 反代（SSE 调优）/ 镜像自动发布 ghcr.io | Phase 19 |
 | 📊 监控（精简版） | 零依赖进程内计数器 + Prometheus 格式 `/metrics`；检索缓存（带数据版本失效）；LLM fallback | Phase 20 |
 | 🧪 RAG 评测 | 24 条评测集，Recall@1 95% / Recall@3 100% / faithfulness 96%（LLM 裁判） | Phase 21 |
@@ -226,7 +226,7 @@ docker build -t pgvector/pgvector:pg16 docker/pgvector/
 uv run pytest
 ```
 
-**67 个测试**，分两层：
+**77 个测试**（21 单元 + 56 集成），分两层：
 
 | 层 | 位置 | 依赖 | 说明 |
 |---|---|---|---|
@@ -581,7 +581,7 @@ AI-Customer-Service-Platform/
 | 14 | V6 RAG 知识库 | 📚 | ✅ |
 | 15 | V7 Agent + Tool | 🛠️ | ✅ |
 | 16 | V8 AI + 人工协同 | 👥 | ✅ |
-| 17 | V9 消息队列 / Worker | 📨 | ⏭️ 已跳过 |
+| 17 | V9 消息队列 / Worker | 📨 | ⏭️ 已跳过 → BackgroundTasks + 启动恢复 + 重试替代 |
 | 18 | V10 测试与工程化 | 📝 | ✅ |
 | 19 | V11 Docker + Nginx + CI/CD | 🐳 | ✅ |
 | 20 | V12 日志 / 监控 / Tracing | 📊 | ✅ 精简为 /metrics + 结构化日志 |
