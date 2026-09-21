@@ -47,3 +47,9 @@ packages = ["app"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# 异步用例自动识别(不必逐个加 @pytest.mark.asyncio)
+asyncio_mode = "auto"
+# 夹具与用例共用同一个 session 级事件循环 —— 否则 session 级异步夹具
+# (测试库建表、基础设施初始化)会因跨事件循环绑定而报 "attached to a different loop"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
