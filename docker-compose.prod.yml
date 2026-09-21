@@ -1,0 +1,51 @@
+services:
+  # ── 应用本体 ─────────────────────────────────────────────
+  # 镜像由 CI 构建并推到 ghcr.io；本地也可以用 build: 从源码构建。
+  # 写两个来源、注释掉 build：本地拉不到 ghcr 时取消注释即可本地构建。
+  app:
+    image: ghcr.io/popzack/ai-customer-service-platform:latest
+    # build: .                    # 本地构建时启用这一行、并注释掉上面的 image
+    container_name: ai_cs_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy   # 等库真正可连接再启动，避免启动期迁移/连接失败
+      redis:
+        condition: service_started
+    environment:
+      # 覆盖 .env 里指向 localhost 的连接串 —— 容器之间走服务名。
+      # env_file 里其余配置(LLM key 等)原样透传。
+      DATABASE_URL: postgresql+asyncpg://ai_cs:ai_cs_pwd@postgres:5432/ai_customer_service
+      REDIS_URL: redis://redis:6379/0
+      # 应用容器内不做迁移：迁移是显式的一次性动作，跟容器启停解耦
+      # (compose 里做迁移会在多副本时重复执行，也把"改 schema"藏进了部署)。
+    env_file:
+      - .env
+    volumes:
+      # 上传的文档放卷里：容器重建不丢已上传的文件
+      - uploads:/app/data/uploads
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+  # ── Nginx 反向代理 ───────────────────────────────────────
+  # 职责:统一入口(80)、SSE 关闭缓冲、放开上传体积限制。
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: ai_cs_nginx
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  uploads:
