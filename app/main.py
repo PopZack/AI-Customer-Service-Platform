@@ -11,6 +11,7 @@ import os as _os
 _os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 _os.environ.setdefault("OMP_NUM_THREADS", "1")
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -29,6 +30,10 @@ from app.infrastructure.database import close_db, init_db
 from app.infrastructure.embedding import close_embedding, init_embedding
 from app.infrastructure.llm import close_llm, init_llm
 from app.infrastructure.redis import close_redis, init_redis
+from app.tasks.document_tasks import (
+    process_document_with_retry,
+    recover_stuck_document_ids,
+)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -47,6 +52,13 @@ async def lifespan(app: FastAPI):
     # 第 14 阶段:预热本地 embedding 模型(首次含模型下载;失败降级,不阻塞启动)
     if not await init_embedding():
         logger.warning("embedding 模型加载失败,知识库向量检索将不可用(关键词检索仍可工作)")
+    # Phase 17 精简决策的补强:BackgroundTasks 随进程死亡,启动时恢复被打断的文档任务。
+    # 恢复任务丢进事件循环即可 —— 没有用 BackgroundTasks 是因为这里已不在请求作用域内。
+    stuck_ids = await recover_stuck_document_ids()
+    for doc_id in stuck_ids:
+        asyncio.create_task(process_document_with_retry(doc_id))
+    if stuck_ids:
+        logger.warning("启动恢复:%s 个因重启而中断的文档索引任务已重新入队 %s", len(stuck_ids), stuck_ids)
     yield
     # 释放资源(先关应用层依赖,再关 DB)
     await close_embedding()

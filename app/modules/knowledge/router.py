@@ -26,7 +26,7 @@ from app.modules.knowledge.schemas import (
     SearchResponse,
 )
 from app.modules.knowledge.service import KnowledgeService
-from app.tasks.document_tasks import process_document
+from app.tasks.document_tasks import enqueue_document
 
 router = APIRouter()
 
@@ -75,7 +75,8 @@ async def upload_document(
     doc = await service.upload_document(kb_id, file, current_user.id)
 
     # 响应返回后执行;任务内部自建 session(此时请求 session 已关闭)
-    background_tasks.add_task(process_document, doc.id)
+    # 唯一入队口(见 enqueue_document 文档字符串):换队列只改这一处实现
+    enqueue_document(background_tasks.add_task, doc.id)
     return success(doc)
 
 

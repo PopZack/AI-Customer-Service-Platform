@@ -7,10 +7,12 @@
 所以这里每一步都自己开新 session —— 与 SSE 端点同样的处理方式。
 状态每步提交,前端轮询 /documents/{id} 能看到实时进度。
 """
+import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.ai.rag.cache import bump_version
 from app.ai.rag.chunker import split_text
@@ -138,3 +140,63 @@ async def process_document(document_id: int) -> None:
         # 无论成败,只要跑过索引,块的内容/向量就可能变过 —— 检索缓存全部作废。
         # (旧键不删,靠 TTL 过期;新版本号的键从现在起才写。)
         await bump_version()
+
+
+# ── 入队 / 重试 / 启动恢复(Phase 17 精简决策的补强)───────────────
+#
+# 背景:BackgroundTasks 跟随进程生死 —— 进程重启会把"解析中/向量化中"的任务
+# 直接丢掉,文档永远卡在中间状态。这里用三个小函数补掉这个伤,同时留好
+# 二次开发接缝:将来上 procrastinate / Redis Stream 时,只改 enqueue_document
+# 的函数体,调用方(knowledge router / 启动恢复)一行都不用动。
+
+#: 视为"卡在中间状态"的文档状态集合(0=已上传未开工也算)
+_RECOVERABLE_STATUSES = (
+    DocumentStatus.UPLOADED,
+    DocumentStatus.PARSING,
+    DocumentStatus.CHUNKING,
+    DocumentStatus.EMBEDDING,
+)
+
+
+def enqueue_document(add_task: Callable[..., None], document_id: int) -> None:
+    """任务入队的**唯一入口**。
+
+    add_task 传 BackgroundTasks.add_task。整个代码库不允许绕过这里
+    直接 add_task(process_document) —— 否则将来换队列时会有漏网之鱼。
+    """
+    add_task(process_document_with_retry, document_id)
+
+
+async def process_document_with_retry(document_id: int, max_attempts: int = 2) -> None:
+    """带重试的处理。process_document 失败会把状态置为 FAILED,据此判断是否重跑。
+
+    重试是"尽力而为":永久性失败(如扫描版 PDF 提不出文字)重试也不会成功,
+    只是多花一次尝试 —— 不做错误分类,换来的是零额外状态。
+    """
+    for attempt in range(1, max_attempts + 1):
+        await process_document(document_id)
+        async with async_session_factory() as session:
+            doc = await session.get(Document, document_id)
+            if doc is None:  # 处理期间被删除:不重试
+                return
+            if doc.status != DocumentStatus.FAILED:
+                return
+        if attempt < max_attempts:
+            logger.warning("文档 %s 第 %s 次处理失败,稍后重试", document_id, attempt)
+            await asyncio.sleep(1)
+    logger.error("文档 %s 重试 %s 次后仍失败,保持 FAILED 状态", document_id, max_attempts)
+
+
+async def recover_stuck_document_ids() -> list[int]:
+    """找出卡在中间状态的文档(进程重启打断了 BackgroundTasks)。
+
+    只负责"找",不负责"跑" —— 入队方式(应用内 asyncio task / 将来的队列)
+    由调用方决定,这样本函数保持纯查询、可在测试里直接断言返回值。
+    """
+    if async_session_factory is None:
+        return []
+    async with async_session_factory() as session:
+        rows = await session.execute(
+            select(Document.id).where(Document.status.in_(_RECOVERABLE_STATUSES))
+        )
+        return [row[0] for row in rows]

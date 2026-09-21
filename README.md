@@ -305,6 +305,11 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml \
 > nginx 镜像与 ghcr 拉取本机均不可达，`docker-compose.prod.yml` 的完整性由
 > `docker compose ... config` 静态校验，端到端拉起由服务器侧执行。
 
+> ✅ **第 17 阶段（跳过消息队列）的补强**：BackgroundTasks 随进程死亡 ——
+> 启动时自动恢复卡在中间状态（解析中/切块中/向量化中）的文档任务，
+> 处理失败自动重试一次。入队收敛到唯一入口 `enqueue_document()`，
+> 将来换 procrastinate / Redis Stream 只改这一个函数体。
+>
 > ⚠️ **第 16 阶段的权限取舍**：工单的指派/回复采用**基于数据归属的最小门槛**
 > （认领即接管、已指派者才能回复），**未启用角色权限校验**。
 > 设计文档定义了 `ticket:view` / `ticket:edit` 权限码，但角色与权限数据尚未播种，
