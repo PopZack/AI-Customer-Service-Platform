@@ -125,6 +125,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # buildx 的 gha 缓存后端(type=gha)要求 actions:write，
+      # 只给 packages:write 会在"构建并推送"报 cache backend 错误（CI 实测踩过）
+      actions: write
 
     steps:
       - uses: actions/checkout@v4
