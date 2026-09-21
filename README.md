@@ -12,7 +12,7 @@
 
 ## ✨ 功能亮点
 
-### 已实现（Phase 9-14）
+### 已实现（Phase 9-16）
 
 | 能力 | 说明 | 阶段 |
 |---|---|---|
@@ -22,12 +22,14 @@
 | ⚡ Redis 异步 | 限流中间件 / 健康检查 / 缓存工具类（铺路） | Phase 12 |
 | 🤖 LLM + AI Chat | OpenAI 兼容客户端 / SSE 流式输出 / 多轮上下文 / 会话 CRUD | Phase 13 |
 | 📚 RAG 知识库 | 文档上传解析切块 / 本地 embedding / pgvector 入库 / 混合检索 / 带引用回答 | Phase 14 |
+| 🛠️ Agent + Tool | 5 个工具的 function calling：检索 / 查工单 / 建单 / 转人工 / 查用户资料 | Phase 15 |
+| 👥 AI + 人工协同 | 会话状态机（AI→等待人工→人工接管→结束）/ 显式+隐式转人工 / 工单闭环 | Phase 16 |
 
-### 规划中（Phase 15-22）
+### 规划中（Phase 17-22）
 
-Agent + Tool → 人工协同 → 测试与工程化 → Docker + CI/CD → 监控 → AI 评估 → 生产优化
+测试与工程化 → Docker + CI/CD → 监控 → AI 评估 → 生产优化
 
-> 收尾采用**精简路线**：Phase 15/16 做满，**Phase 17 消息队列跳过**（文档解析与 embedding 改用 FastAPI BackgroundTasks，本项目无高并发场景），Phase 18-22 按精简版收尾。
+> 收尾采用**精简路线**：**Phase 17 消息队列跳过**（文档解析与 embedding 改用 FastAPI BackgroundTasks，本项目无高并发场景），Phase 18-22 按精简版收尾。
 
 ---
 
@@ -80,6 +82,34 @@ SSE 端点不能用 FastAPI 依赖注入的 DB session——`EventSourceResponse
 **2. 关键词检索用 bigram，不用 `tsvector`。**
 
 PostgreSQL 的全文检索**没有中文分词器**（需要 zhparser 扩展，官方镜像里没有），`tsvector` 对中文基本不可用。这里用**字符二元组匹配**：把查询切成 bigram，统计命中数排序，配合 `pg_trgm` 的 GIN 索引加速。对客服场景的短查询足够鲁棒，且完全在 SQL 内完成。
+
+---
+
+### Agent 的三个关键取舍
+
+**1. 流式做工具轮，不用非流式。**
+
+非流式要等整轮生成完才返回，多轮工具调用会让用户干等几十秒。流式下模型先说的思考文字可以立刻推给用户，工具参数则**按 index 跨 chunk 累积**到完整再执行 —— OpenAI 兼容接口会把一次工具调用切成多个 chunk 下发，id 和函数名往往只在第一个 chunk 出现，`arguments` 是被切碎的 JSON 字符串。这是本项目最容易写错的一处，因此专门写了确定性单测覆盖（`tests/unit/test_agent_loop.py`）。
+
+**2. RAG 预注入与工具检索并存，不是二选一。**
+
+常见问答题由 M1 的「检索结果预先拼进 system prompt」直接兜住，不必多花一次工具往返；`search_knowledge` 工具则留给需要换措辞再检索、或多跳追问的场景。两者叠加的代价是偶尔重复检索一次，换来的是常见路径的低延迟与高可靠性。
+
+**3. 轮数上限要「强制收尾」，不能直接报错。**
+
+`MAX_STEPS=5` 防止模型在两个工具之间打转烧 token。但达到上限时不是抛异常，而是**带 `tools=None` 再调一次**，强制模型给出文本答案 —— 否则用户会看到一句"我还在调工具"，体验比慢更差。
+
+### 转人工的两条路径
+
+```
+显式：用户点「转人工」按钮  ┐
+                          ├→ request_handoff() → 会话置「等待人工」+ 落 system 消息 + 保证有工单
+隐式：连续 3 次检索为空    ┘
+```
+
+两条路径**共用同一个函数**，否则「转人工」会出现两种不同的落库形态，排查时无法统一。
+
+隐式计数用 Redis（`chat:empty_retrieval:{id}`，带 1 小时 TTL）而非数据库：它是短期会话状态、不是审计数据，天然需要过期；命中非空检索时立即清零。Redis 不可用时该能力静默降级，不阻断对话。
 
 ---
 
@@ -146,7 +176,7 @@ uv run uvicorn app.main:app --reload
 下载失败不影响启动，只是向量检索降级为纯关键词检索。
 
 访问：
-- **演示页**：<http://localhost:8000/static/index.html>（上传文档 / 带引用对话 / 检索预览）
+- **演示页**：<http://localhost:8000/static/index.html>（知识库 / 带引用对话 / 检索预览 / **工单客服台**）
 - 健康检查（liveness）：<http://localhost:8000/health>
 - 健康检查（readiness，含 DB + Redis）：<http://localhost:8000/api/v1/health>
 - API 文档（Swagger）：<http://localhost:8000/docs>
@@ -173,6 +203,15 @@ uv run ruff format .          # 格式化(ruff 的 formatter 兼容 black,已不
 docker build -t pgvector/pgvector:pg16 docker/pgvector/
 ```
 
+> ⚠️ **第 16 阶段的权限取舍**：工单的指派/回复采用**基于数据归属的最小门槛**
+> （认领即接管、已指派者才能回复），**未启用角色权限校验**。
+> 设计文档定义了 `ticket:view` / `ticket:edit` 权限码，但角色与权限数据尚未播种，
+> 此时强校验会让所有人 403。等权限体系落地后再收紧。
+>
+> ⚠️ **已知技术债**：schemas 里仍在用 Pydantic V1 风格的 `class Config`（已弃用，
+> V3 会失效），正确写法是 `model_config = ConfigDict(from_attributes=True)`；
+> 连同下面的 lint 一起在 Phase 18 收敛。
+>
 > ⚠️ **已知待收敛**：`uv run ruff check .` 目前**不是全绿**（存量错误，主要是 FastAPI
 > 依赖注入写法触发的 `B008`）。收敛排在 Phase 18「测试与工程化」。新代码请保证自己的
 > 文件零新增错误 —— 例如用 `Annotated[AsyncSession, Depends(...)]` 代替 `db: AsyncSession = Depends(...)`。
@@ -214,14 +253,17 @@ docker build -t pgvector/pgvector:pg16 docker/pgvector/
 }
 ```
 
-SSE 事件流：
+SSE 事件流（第 15/16 阶段扩展了工具与转人工事件）：
 ```
 data: {"type":"start"}
 data: {"type":"content","content":"退款"}
 data: {"type":"content","content":"通常"}
-data: {"type":"content","content":"会在"}
+data: {"type":"tool_start","tool":"search_knowledge","content":"正在检索知识库…"}
+data: {"type":"tool_end","tool":"search_knowledge"}
+data: {"type":"handoff","status":2,"ticket_id":12,"content":"已为您转接人工客服"}
+data: {"type":"notice","content":"（已达到工具调用轮数上限，直接作答）"}
 data: {"type":"error","message":"LLM 超时"}    ← 出错
-data: {"type":"done"}
+data: {"type":"done","status":1}              ← 附带会话最新状态
 ```
 
 回答会基于知识库检索结果，并在正文里标注引用编号（如 `退款一般 3 到 5 个工作日到账[1]`）。
@@ -269,6 +311,29 @@ data: {"type":"done"}
 }
 ```
 
+### Tickets — 工单与人工协同（Phase 16）
+
+| 方法 | 端点 | 说明 |
+|---|---|---|
+| GET | `/api/v1/tickets` | 工单列表（`?status=0` 待处理队列 / `?assigned_user=0` 未认领） |
+| GET | `/api/v1/tickets/{id}` | 工单详情（含往来记录） |
+| POST | `/api/v1/tickets/{id}/assign` | 指派；不传 `agent_id` 表示**认领给自己** |
+| POST | `/api/v1/tickets/{id}/reply` | 客服回复 |
+| POST | `/api/v1/tickets/{id}/close` | 关单（同时结束会话） |
+| POST | `/api/v1/conversations/{id}/handoff` | **显式转人工**（用户点按钮） |
+| GET | `/api/v1/conversations/{id}/handoff-signal` | 查看转人工判定信号（连续空检索次数 / 阈值） |
+
+**人工回复是双写的**：既写 `ticket_message`（客服侧审计留痕），也写 `message`（用户在聊天窗口能看到）。
+只写工单表的话，客服回了话、用户在自己的会话里却看不到 —— 这是"AI + 人工协同"最影响体感的一处。
+
+会话状态机：
+
+```
+1 AI 服务中 ──转人工──→ 2 等待人工 ──客服认领──→ 3 人工接管 ──关单──→ 0 已结束
+```
+
+处于 2 / 3 的会话，AI 不再作答（用户消息仍入库，等客服处理）。
+
 ### 认证流程
 
 ```
@@ -308,10 +373,10 @@ AI-Customer-Service-Platform/
 │   │   ├── user/               # 用户管理
 │   │   ├── chat/               # 💬 会话 + AI 聊天（SSE 流式）
 │   │   ├── knowledge/          # 📚 知识库 + 文档上传 + 检索预览
-│   │   └── ticket/             # 工单
+│   │   └── ticket/             # ✅ 工单：列表/指派/人工回复/关单
 │   ├── ai/                     # 🤖 AI 能力层（独立于业务模块）
 │   │   ├── router/             # AI Router（意图识别）
-│   │   ├── agent/              # Agent + Tool（Phase 15）
+│   │   ├── agent/              # ✅ Agent 循环 + 转人工判定（handoff.py）
 │   │   ├── rag/                # ✅ 检索增强生成
 │   │   │   ├── config.py       #   模型名/维度/切块/检索参数（写死的常量）
 │   │   │   ├── parser.py       #   PDF/DOCX/MD/TXT 文本抽取
@@ -321,7 +386,7 @@ AI-Customer-Service-Platform/
 │   │   ├── memory/             # 对话记忆
 │   │   ├── prompt/             # Prompt 模板（system.py，含 RAG 提示词）
 │   │   ├── llm/                # LLM 客户端（预留）
-│   │   └── tools/              # Tool 定义
+│   │   └── tools/              # ✅ 工具定义（definitions）+ 执行器（executor）
 │   ├── infrastructure/         # 外部技术实现
 │   │   ├── database/           # PostgreSQL（async engine + session）
 │   │   ├── redis/              # Redis（client + ratelimit + cache）
@@ -375,10 +440,10 @@ AI-Customer-Service-Platform/
 | 12 | V4 Redis + 异步 | ⚡ | ✅ |
 | 13 | V5 LLM + AI Chat | 🤖 | ✅ |
 | 14 | V6 RAG 知识库 | 📚 | ✅ |
-| 15 | V7 Agent + Tool | 🛠️ | ⏳ 下一阶段 |
-| 16 | V8 AI + 人工协同 | 👥 | ⏳ |
+| 15 | V7 Agent + Tool | 🛠️ | ✅ |
+| 16 | V8 AI + 人工协同 | 👥 | ✅ |
 | 17 | V9 消息队列 / Worker | 📨 | ⏭️ 已跳过 |
-| 18 | V10 测试与工程化 | 📝 | ⏳ |
+| 18 | V10 测试与工程化 | 📝 | ⏳ 下一阶段 |
 | 19 | V11 Docker + Nginx + CI/CD | 🐳 | ⏳ |
 | 20 | V12 日志 / 监控 / Tracing | 📊 | ⏳ |
 | 21 | V13 AI Evaluation | 🧪 | ⏳ |

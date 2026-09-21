@@ -106,6 +106,7 @@
   <button data-tab="kb" class="active">知识库</button>
   <button data-tab="chat">AI 对话</button>
   <button data-tab="search">检索预览</button>
+  <button data-tab="ticket">工单（客服）</button>
   <button data-tab="auth">登录 / 注册</button>
 </nav>
 
@@ -147,7 +148,13 @@
       <div class="row">
         <button class="primary" onclick="newConversation()">新建会话</button>
         <span class="muted" id="convInfo">未创建会话</span>
+        <span id="convStatus"></span>
+        <button onclick="requestHandoff()" id="handoffBtn" disabled>转人工</button>
       </div>
+      <p class="muted" style="margin:10px 0 0">
+        会话状态机会随对话推进:AI 服务中 → 等待人工 → 人工接管 → 已结束。
+        AI 连续 3 次检索不到资料会自动转人工,你也可以直接点「转人工」。
+      </p>
     </div>
 
     <div class="card">
@@ -176,6 +183,40 @@
         调切块参数、看检索质量时最有用 —— 直接看命中了哪些块和 RRF 分数。
       </p>
       <div id="searchHits" style="margin-top:12px"></div>
+    </div>
+  </section>
+
+  <!-- ── 工单(客服视角)───────────────────────────── -->
+  <section id="tab-ticket">
+    <div class="card">
+      <h2>工单队列</h2>
+      <div class="row">
+        <select id="ticketStatusFilter">
+          <option value="">全部状态</option>
+          <option value="0">待处理</option>
+          <option value="1">处理中</option>
+          <option value="2">已完成</option>
+          <option value="3">已关闭</option>
+        </select>
+        <button class="primary" onclick="loadTickets()">刷新</button>
+        <span class="muted">转人工时自动建单,客服在这里认领与回复</span>
+      </div>
+      <div id="ticketList" style="margin-top:12px"><p class="empty">点「刷新」加载工单</p></div>
+    </div>
+
+    <div class="card" id="ticketDetailCard" style="display:none">
+      <h2 id="ticketDetailTitle">工单详情</h2>
+      <div id="ticketMessages"></div>
+      <div class="row" style="margin-top:12px">
+        <button onclick="assignTicket()" id="assignBtn">认领给自己</button>
+        <button onclick="closeTicket()" id="closeBtn">关单</button>
+      </div>
+      <div style="margin-top:10px">
+        <textarea id="replyInput" placeholder="以客服身份回复用户…(会同时写入会话,用户在聊天窗口能看到)"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" onclick="replyTicket()" id="replyBtn">发送回复</button>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -410,10 +451,66 @@ async function newConversation() {
     });
     currentConvId = conv.id;
     document.getElementById('convInfo').textContent = `会话 #${conv.id}`;
+    setConvStatus(conv.status);
+    document.getElementById('handoffBtn').disabled = false;
     document.getElementById('messages').innerHTML =
       '<p class="empty">还没有消息。试着问一个与知识库文档相关的问题。</p>';
     toast('会话已创建');
   } catch (e) { toast('创建会话失败：' + e.message); }
+}
+
+const CONV_STATUS = {
+  0: ['已结束', 'err'], 1: ['AI 服务中', 'ok'],
+  2: ['等待人工', 'wait'], 3: ['人工接管', ''],
+};
+
+function setConvStatus(status) {
+  const el = document.getElementById('convStatus');
+  if (status == null) { el.innerHTML = ''; return; }
+  const [text, cls] = CONV_STATUS[status] || ['未知', ''];
+  el.innerHTML = `<span class="tag ${cls}">${text}</span>`;
+  // 已交给人工后,AI 不再作答,转人工按钮也应禁用
+  document.getElementById('handoffBtn').disabled = !(status === 1);
+}
+
+function showToolHint(text) {
+  let el = document.getElementById('toolHint');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toolHint';
+    el.className = 'muted';
+    el.style.margin = '0 0 10px 2px';
+    document.getElementById('messages').appendChild(el);
+  }
+  el.textContent = '⚙ ' + text;
+}
+
+function clearToolHint() {
+  const el = document.getElementById('toolHint');
+  if (el) el.remove();
+}
+
+function appendSystemNote(text) {
+  const box = document.getElementById('messages');
+  if (box.querySelector('.empty')) box.innerHTML = '';
+  const div = document.createElement('div');
+  div.className = 'msg';
+  div.innerHTML = `<div class="bubble" style="background:#fdf3e3;color:#a15c00;font-size:13px">${esc(text)}</div>`;
+  box.appendChild(div);
+}
+
+async function requestHandoff() {
+  if (!currentConvId) return toast('请先创建会话');
+  if (!confirm('确认转接人工客服?转接后 AI 将不再回答该会话。')) return;
+  try {
+    const r = await api(`/conversations/${currentConvId}/handoff`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: '用户主动请求人工客服' }),
+    });
+    setConvStatus(r.status);
+    appendSystemNote(`已转接人工客服${r.ticket_id ? '(工单 #' + r.ticket_id + ')' : ''}`);
+    toast('已转人工');
+  } catch (e) { toast('转人工失败：' + e.message); }
 }
 
 function appendMessage(role, html) {
@@ -469,10 +566,24 @@ async function sendMessage() {
         try { evt = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }
 
         if (evt.type === 'content') {
+          clearToolHint();
           answer += evt.content;
           bubble.innerHTML = renderCitations(answer);
+        } else if (evt.type === 'tool_start') {
+          // 工具执行期间给用户反馈,否则多轮工具调用会让界面长时间静止
+          showToolHint(evt.content || ('正在执行 ' + evt.tool + '…'));
+        } else if (evt.type === 'tool_end') {
+          clearToolHint();
+        } else if (evt.type === 'notice') {
+          appendSystemNote(evt.content);
+        } else if (evt.type === 'handoff') {
+          setConvStatus(evt.status);
+          appendSystemNote('已转接人工客服' + (evt.ticket_id ? '(工单 #' + evt.ticket_id + ')' : ''));
         } else if (evt.type === 'error') {
+          clearToolHint();
           bubble.innerHTML = '<span style="color:#c0392b">出错了：' + esc(evt.message) + '</span>';
+        } else if (evt.type === 'done') {
+          if (evt.status != null) setConvStatus(evt.status);
         }
       }
     }
@@ -505,6 +616,84 @@ async function doSearch() {
         chunk ${h.chunk_id} · RRF ${h.rrf_score.toFixed(5)}</div>
         <div class="body">${esc(h.content)}</div></div>`).join('');
   } catch (e) { box.innerHTML = `<p class="empty">检索失败：${esc(e.message)}</p>`; }
+}
+
+// ── 工单(客服视角)────────────────────────────────────
+let currentTicketId = null;
+
+const TICKET_TAG = {
+  0: ['wait', '待处理'], 1: ['', '处理中'], 2: ['ok', '已完成'], 3: ['err', '已关闭'],
+};
+
+async function loadTickets() {
+  const box = document.getElementById('ticketList');
+  box.innerHTML = '<p class="muted">加载中…</p>';
+  const status = document.getElementById('ticketStatusFilter').value;
+  const qs = status === '' ? '' : ('?status=' + encodeURIComponent(status));
+  try {
+    const data = await api('/tickets' + qs);
+    if (!data.items.length) { box.innerHTML = '<p class="empty">暂无工单</p>'; return; }
+    let html = '<table><thead><tr><th>ID</th><th>状态</th><th>优先级</th><th>指派</th><th>问题摘要</th><th></th></tr></thead><tbody>';
+    data.items.forEach(t => {
+      const [cls, text] = TICKET_TAG[t.status] || ['', '未知'];
+      html += `<tr>
+        <td>${t.id}</td>
+        <td><span class="tag ${cls}">${text}</span></td>
+        <td>${esc(t.priority_text || '-')}</td>
+        <td>${t.assigned_user == null ? '<span class="muted">未指派</span>' : t.assigned_user}</td>
+        <td>${esc(t.summary || '-')}</td>
+        <td><button class="link" onclick="openTicket(${t.id})">处理</button></td>
+      </tr>`;
+    });
+    box.innerHTML = html + '</tbody></table>';
+  } catch (e) { box.innerHTML = `<p class="empty">加载失败：${esc(e.message)}</p>`; }
+}
+
+async function openTicket(ticketId) {
+  currentTicketId = ticketId;
+  try {
+    const t = await api('/tickets/' + ticketId);
+    document.getElementById('ticketDetailCard').style.display = '';
+    document.getElementById('ticketDetailTitle').textContent =
+      `工单 #${t.id} · ${t.status_text} · 优先级 ${t.priority_text}`;
+    const box = document.getElementById('ticketMessages');
+    box.innerHTML = t.messages.map(m => `
+      <div class="hit"><div class="meta">[${m.sender_type}] ${m.created_at}</div>
+      <div class="body">${esc(m.content)}</div></div>`).join('') || '<p class="empty">暂无往来记录</p>';
+    document.getElementById('replyInput').value = '';
+  } catch (e) { toast('加载工单失败：' + e.message); }
+}
+
+async function assignTicket() {
+  if (!currentTicketId) return;
+  try {
+    const t = await api(`/tickets/${currentTicketId}/assign`, { method: 'POST', body: JSON.stringify({}) });
+    toast(`已认领(指派给用户 ${t.assigned_user}),会话进入人工接管`);
+    await loadTickets();
+    await openTicket(currentTicketId);
+  } catch (e) { toast('认领失败：' + e.message); }
+}
+
+async function replyTicket() {
+  if (!currentTicketId) return;
+  const content = document.getElementById('replyInput').value.trim();
+  if (!content) return toast('请输入回复内容');
+  try {
+    await api(`/tickets/${currentTicketId}/reply`, { method: 'POST', body: JSON.stringify({ content }) });
+    toast('已回复(同时写入会话)');
+    await openTicket(currentTicketId);
+  } catch (e) { toast('回复失败：' + e.message); }
+}
+
+async function closeTicket() {
+  if (!currentTicketId) return;
+  if (!confirm('确认关单?对应会话也会结束。')) return;
+  try {
+    await api(`/tickets/${currentTicketId}/close`, { method: 'POST', body: JSON.stringify({}) });
+    toast('工单已关闭,会话已结束');
+    await loadTickets();
+    await openTicket(currentTicketId);
+  } catch (e) { toast('关单失败：' + e.message); }
 }
 
 document.getElementById('chatInput').addEventListener('keydown', e => {
