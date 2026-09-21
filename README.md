@@ -13,7 +13,7 @@
 
 ## ✨ 功能亮点
 
-### 已实现（Phase 9-18）
+### 已实现（Phase 9-19）
 
 | 能力 | 说明 | 阶段 |
 |---|---|---|
@@ -26,10 +26,11 @@
 | 🛠️ Agent + Tool | 5 个工具的 function calling：检索 / 查工单 / 建单 / 转人工 / 查用户资料 | Phase 15 |
 | 👥 AI + 人工协同 | 会话状态机（AI→等待人工→人工接管→结束）/ 显式+隐式转人工 / 工单闭环 | Phase 16 |
 | 📝 测试与工程化 | 67 个测试（单元 + 集成，真实 PG/Redis/embedding）/ 生产 Dockerfile / GitHub Actions | Phase 18 |
+| 🐳 Docker + CI/CD | 全栈 compose 编排 + Nginx 反代（SSE 调优）/ 镜像自动发布 ghcr.io | Phase 19 |
 
-### 规划中（Phase 19-22）
+### 规划中（Phase 20-22，精简收尾）
 
-Docker Compose 编排 + Nginx + CD → 监控 → AI 评估 → 生产优化
+检索缓存 + LLM 超时重试 → 评测集（Recall / faithfulness）→ 文档与现状对齐
 
 > 收尾采用**精简路线**：**Phase 17 消息队列跳过**（文档解析与 embedding 改用 FastAPI BackgroundTasks，本项目无高并发场景），Phase 18-22 按精简版收尾。
 
@@ -166,7 +167,10 @@ uv run alembic upgrade head
 #    DeepSeek:   https://api.deepseek.com/v1, model=deepseek-chat
 #    Qwen:       https://dashscope.aliyuncs.com/compatible-mode/v1, model=qwen-plus
 #    Moonshot:   https://api.moonshot.cn/v1, model=moonshot-v1-8k
-#    豆包:       https://ark.cn-beijing.volces.com/api/v3
+#    豆包:       https://ark.cn-beijing.volces.com/api/v3, model=方舟的模型ID或接入点ep-xxx
+#    ⚠️ 方舟 Agent Plan 是独立产品线,端点不同:
+#               https://ark.cn-beijing.volces.com/api/plan/v3, model=ark-code-latest
+#               (Agent Plan 的 key 是 ark- 开头,用普通 /api/v3 端点会 401)
 #    编辑 .env:
 #      LLM_API_KEY=sk-xxx
 #      LLM_BASE_URL=https://api.deepseek.com/v1
@@ -258,7 +262,45 @@ Dockerfile 里处理并注明：`static/` 必须拷进去（否则容器里演�
 以及 onnxruntime 依赖 `libgomp1`（slim 基础镜像默认没有）。
 
 > ⚠️ 本机 Docker Hub 不可达，**该镜像无法在本地构建验证**，
-> 由 CI 的 `build` job 实际构建（GitHub runner 能正常访问 Docker Hub 与 ghcr.io）。
+> 由 CI 实际构建（GitHub runner 能正常访问 Docker Hub 与 ghcr.io）。
+
+### 生产部署（Phase 19）
+
+CI 在每次 push 到 `main` 且 lint/test/build 全过后，自动把镜像发布到
+`ghcr.io/popzack/ai-customer-service-platform`（`latest` + git sha 两个标签）。
+
+服务器上一份 `.env` + 两条命令即可起全栈：
+
+```bash
+# 1. 准备 .env（参考 .env.example；注意 DATABASE_URL 会被 compose 覆盖为容器网络地址）
+#    ⚠️ 生产必须设置强 JWT_SECRET（≥32 字符），APP_ENV=prod 时用默认值会拒绝启动
+
+# 2. 起全栈（postgres + redis + app + nginx）
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# 3. 首次部署/版本升级：在应用容器里执行迁移
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  run --rm app alembic upgrade head
+```
+
+架构与分工：
+
+```
+用户 → Nginx :80 → app :8000 → postgres(pgvector) / redis
+                        └─ embedding 本地推理，无外部依赖
+```
+
+- **`docker-compose.yml`（开发态）**：只有 postgres + redis，`uv run uvicorn` 直跑。
+- **`docker-compose.prod.yml`（叠加文件）**：追加 app + nginx。`depends_on` 带
+  `condition: service_healthy`，库没就绪应用不启动；上传文件放 `uploads` 卷，容器重建不丢。
+- **迁移与容器启停解耦**：不在容器启动时自动跑迁移 —— 迁移是显式的一次性动作，
+  自动化会在多副本时重复执行，也把"改 schema"藏进了部署过程。
+- **Nginx 对 SSE 的处理**：`/api/v1/chat` 单独一个 location，`proxy_buffering off`
+  + 300s 读超时。不关缓冲的话，逐字输出会被攒成大块再发，用户看到"卡半天突然全出来"。
+- **回滚**：`image:` 改成具体的 sha 标签再 `up -d` 即可（这就是为什么除了 latest 还推 sha 标签）。
+
+> nginx 镜像与 ghcr 拉取本机均不可达，`docker-compose.prod.yml` 的完整性由
+> `docker compose ... config` 静态校验，端到端拉起由服务器侧执行。
 
 > ⚠️ **第 16 阶段的权限取舍**：工单的指派/回复采用**基于数据归属的最小门槛**
 > （认领即接管、已指派者才能回复），**未启用角色权限校验**。
@@ -477,8 +519,10 @@ AI-Customer-Service-Platform/
 ├── Dockerfile                  # ✅ 生产镜像（多阶段、非 root、healthcheck）
 ├── .dockerignore
 ├── docker/
-│   └── pgvector/Dockerfile     # ✅ 本地构建 pgvector 镜像（不依赖 Docker Hub）
-├── docker-compose.yml          # PostgreSQL(pgvector) + Redis
+│   ├── pgvector/Dockerfile     # ✅ 本地构建 pgvector 镜像（不依赖 Docker Hub）
+│   └── nginx/nginx.conf        # ✅ 反代配置（SSE 关缓冲 / 上传体积对齐）
+├── docker-compose.yml          # 开发态：PostgreSQL(pgvector) + Redis
+├── docker-compose.prod.yml     # ✅ 生产态：追加 app + nginx（全栈）
 ├── pyproject.toml              # 依赖声明（uv）
 ├── .env.example                # 环境变量模板
 └── design_docs/                # 完整设计文档
@@ -510,7 +554,7 @@ AI-Customer-Service-Platform/
 | 16 | V8 AI + 人工协同 | 👥 | ✅ |
 | 17 | V9 消息队列 / Worker | 📨 | ⏭️ 已跳过 |
 | 18 | V10 测试与工程化 | 📝 | ✅ |
-| 19 | V11 Docker + Nginx + CI/CD | 🐳 | ⏳ 下一阶段 |
+| 19 | V11 Docker + Nginx + CI/CD | 🐳 | ✅ |
 | 20 | V12 日志 / 监控 / Tracing | 📊 | ⏳ |
 | 21 | V13 AI Evaluation | 🧪 | ⏳ |
 | 22 | V14 生产级优化 | 🚀 | ⏳ |

@@ -112,3 +112,47 @@ jobs:
       - name: 构建镜像
         # 只验证能构建，不推送。本机 Docker Hub 不可达，这一步是镜像真正的验证途径。
         run: docker build -t ai-customer-service:ci .
+
+  # ── CD：main 分支测试全过后，构建并发布镜像到 ghcr.io ──
+  # 服务器侧用 docker-compose.prod.yml 拉镜像部署（见 README「生产部署」）。
+  # 用 GITHUB_TOKEN 而非 PAT：仅本仓库的 packages 写权限，泄露面最小。
+  release:
+    name: Release (ghcr.io)
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    # PR 不发布；只有 push 到 main（即合并/直推）才发
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 登录 ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成镜像标签（latest + git sha）
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # metadata-action 会自动把大写仓库名转成 ghcr 要求的全小写
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions 缓存：依赖层没变时构建提速明显
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
