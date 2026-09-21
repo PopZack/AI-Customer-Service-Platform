@@ -1,0 +1,30 @@
+{
+  "description": "RAG 评测集:20 条知识题(每条对应语料一个小节,校验检索命中与回答要点)+ 4 条知识库外题(应拒答并引导)。",
+  "usage": "uv run python evals/run_eval.py --top1 --k 3",
+  "cases": [
+    {"id": 1,  "question": "退款审核要多久?退款什么时候到账?", "expect_section": "退款时效", "must_mention": ["1 个工作日", "3 到 5"]},
+    {"id": 2,  "question": "超过 10 个工作日还没收到退款怎么办?", "expect_section": "退款时效", "must_mention": ["人工核查", "订单号"]},
+    {"id": 3,  "question": "定制的东西不想要了能退吗?", "expect_section": "退款条件", "must_mention": ["定制"]},
+    {"id": 4,  "question": "虚拟商品售出后支持退款吗?", "expect_section": "退款条件", "must_mention": ["虚拟"]},
+    {"id": 5,  "question": "质量问题退货运费谁出?", "expect_section": "退款条件", "must_mention": ["平台承担"]},
+    {"id": 6,  "question": "电子发票什么时候发给我?", "expect_section": "发票问题", "must_mention": ["24 小时"]},
+    {"id": 7,  "question": "开增值税专用发票需要提供什么资料?", "expect_section": "发票问题", "must_mention": ["公司全称", "税号"]},
+    {"id": 8,  "question": "纸质发票多久能寄到?", "expect_section": "发票问题", "must_mention": ["7 个工作日"]},
+    {"id": 9,  "question": "下单后多久发货?", "expect_section": "物流与配送", "must_mention": ["48 小时"]},
+    {"id": 10, "question": "新疆发货要几天?", "expect_section": "物流与配送", "must_mention": ["2 至 3 天"]},
+    {"id": 11, "question": "无理由退货的期限是几天?", "expect_section": "退换货流程", "must_mention": ["7 天"]},
+    {"id": 12, "question": "换货可以申请到签收后多少天?", "expect_section": "退换货流程", "must_mention": ["15 天"]},
+    {"id": 13, "question": "退货寄回后多久退款?", "expect_section": "退换货流程", "must_mention": ["3 个工作日"]},
+    {"id": 14, "question": "账号好像被盗了怎么办?", "expect_section": "账号与安全", "must_mention": ["修改密码", "冻结"]},
+    {"id": 15, "question": "升级黄金会员需要消费多少?", "expect_section": "会员权益", "must_mention": ["2000"]},
+    {"id": 16, "question": "黄金会员有什么优惠?", "expect_section": "会员权益", "must_mention": ["95 折"]},
+    {"id": 17, "question": "会员会不会被降级?", "expect_section": "会员权益", "must_mention": ["12 个月", "通知"]},
+    {"id": 18, "question": "付款成功了但订单一直没更新怎么办?", "expect_section": "支付问题", "must_mention": ["重复支付", "15 分钟"]},
+    {"id": 19, "question": "优惠券可以和秒杀价一起用吗?", "expect_section": "优惠券使用", "must_mention": ["叠加"]},
+    {"id": 20, "question": "电子产品保修多久?进水了还能保修吗?", "expect_section": "商品保修", "must_mention": ["12 个月", "进水"]},
+    {"id": 21, "question": "你们公司在南极的门店几点营业?", "expect_section": null, "must_mention": []},
+    {"id": 22, "question": "帮我查一下我隔壁邻居的快递单号。", "expect_section": null, "must_mention": []},
+    {"id": 23, "question": "明天股票大盘会涨吗?", "expect_section": null, "must_mention": []},
+    {"id": 24, "question": "用你们平台怎么炒币?", "expect_section": null, "must_mention": []}
+  ]
+}
