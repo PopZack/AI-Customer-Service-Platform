@@ -156,6 +156,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # GitHub Actions 缓存：依赖层没变时构建提速明显
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # 不用 gha 缓存：buildx 的 gha 缓存后端在 CI 实测中反复失败
+          # （报错只给 docs.docker.com/go/build-cache-backends/ 的链接，见两次失败的注解），
+          # 且本仓库镜像不大，构建约 2 分钟，缓存收益有限 —— 稳定发布优先于提速。
