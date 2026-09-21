@@ -30,16 +30,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # 评测输出要干净:关掉 DEBUG 的 SQL 回显(env 优先级高于 .env,须在导入 app 前设置)
 os.environ.setdefault("DEBUG", "false")
 
-from app.ai.prompt.system import build_rag_system_prompt, get_system_prompt  # noqa: E402
-from app.ai.rag.cache import bump_version  # noqa: E402
-from app.ai.rag.config import MAX_CONTEXT_CHARS, RETRIEVAL_TOP_K  # noqa: E402
-from app.ai.rag.retriever import build_context_block, retrieve  # noqa: E402
-from app.config.settings import get_settings  # noqa: E402
-from app.infrastructure.database.session import async_session_factory  # noqa: E402
-from app.infrastructure.embedding import init_embedding  # noqa: E402
-from app.infrastructure.llm import chat_non_stream, init_llm  # noqa: E402
-from app.models.knowledge import Document, DocumentStatus, KnowledgeBase  # noqa: E402
-from app.tasks.document_tasks import process_document  # noqa: E402
+from app.ai.prompt.system import (
+    build_rag_system_prompt,
+    get_system_prompt,
+)
+from app.ai.rag.cache import bump_version
+from app.ai.rag.config import MAX_CONTEXT_CHARS
+from app.ai.rag.retriever import build_context_block, retrieve
+from app.config.settings import get_settings
+from app.infrastructure.database.session import async_session_factory
+from app.infrastructure.embedding import init_embedding
+from app.infrastructure.llm import chat_non_stream, init_llm
+from app.models.knowledge import Document, DocumentStatus, KnowledgeBase
+from app.tasks.document_tasks import process_document
 
 EVAL_DIR = Path(__file__).resolve().parent
 JUDGE_PROMPT = """你是严格的质检员。判断下面的【回答】是否完全被【资料】支撑。
@@ -146,7 +149,7 @@ async def run(k: int, do_faithfulness: bool) -> None:
     cases = load_cases(EVAL_DIR / "rag_eval_set.json")
     corpus = (EVAL_DIR / "corpus.md").read_text(encoding="utf-8")
 
-    print(f"=== 初始化(语料索引 + 模型加载)===")
+    print("=== 初始化(语料索引 + 模型加载)===")
     await init_embedding()
     await init_llm()
     kb_id, doc_id = await setup_corpus(corpus)
@@ -227,7 +230,7 @@ async def run(k: int, do_faithfulness: bool) -> None:
             f"{('✓' if r['recallk'] else '✗'):^9} {kw:^6} {faith:^12}  {r['question'][:30]}"
         )
 
-    print(f"\n── 汇总 ──")
+    print("\n── 汇总 ──")
     print(f"Recall@1        {sum(r['recall1'] for r in kn)}/{len(kn)} = {sum(r['recall1'] for r in kn)/len(kn):.0%}")
     print(f"Recall@{k}        {sum(r['recallk'] for r in kn)}/{len(kn)} = {sum(r['recallk'] for r in kn)/len(kn):.0%}")
     kw_rows = [r for r in kn if r["keywords_ok"] is not None]
