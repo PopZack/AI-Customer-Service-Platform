@@ -26,7 +26,10 @@ async def test_演示页可访问(client: AsyncClient):
     """静态演示页可访问，且根路径会重定向过去。"""
     r = await client.get("/static/index.html")
     assert r.status_code == 200
-    assert "企业 AI 客服平台" in r.text
+    # 页面标题在 UI 改版时可能变,断言只锁"这是本项目的演示页"的最小特征:
+    # 页面主标识 + 后端交互入口(且不被版本库里的旧文案绑死)
+    assert "AI 客服控制台" in r.text
+    assert "/api/v1" in r.text
 
     # 根路径是 307 重定向（follow_redirects=False 才看得到）
     r = await client.get("/", follow_redirects=False)
