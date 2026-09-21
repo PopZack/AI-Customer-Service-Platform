@@ -18,11 +18,19 @@ ARG PYTHON_VERSION=3.12
 # 与开发机 `uv --version` 保持一致；用浮动 tag 会让构建不可复现
 ARG UV_VERSION=0.12.11
 
+# ⚠️ 必须把 uv 镜像单独做一层 stage，不能直接写
+#     COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} ...
+#   BuildKit 明确不支持在 --from 里做变量展开：
+#     "variable expansion is not supported for --from"
+#   而 FROM 行是支持全局 ARG 的，所以用命名阶段转一手。
+#   （这个错用 `docker build --check .` 能静态查出来，不必真跑一次构建。）
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-image
+
 
 # ── 构建阶段：装依赖 ──────────────────────────────────────
 FROM python:${PYTHON_VERSION}-slim AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /bin/uv
+COPY --from=uv-image /uv /bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
