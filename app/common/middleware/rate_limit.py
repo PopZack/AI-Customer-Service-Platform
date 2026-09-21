@@ -55,7 +55,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 settings.RATE_LIMIT_MAX_REQUESTS,
                 settings.RATE_LIMIT_WINDOW_SECONDS,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 —— 刻意 fail-open:限流不该拖垮可用性
             # Redis 不可用时 fail-open,避免限流依赖拖垮可用性
             logger.warning("限流计数失败(fail-open):%s", exc)
             return await call_next(request)

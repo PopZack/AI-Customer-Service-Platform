@@ -6,7 +6,7 @@
 - refresh token:type="refresh" + jti(UUID4),可吊销(走 Redis 黑名单)
 """
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -33,7 +33,7 @@ def create_access_token(
     """
     settings = get_settings()
     minutes = expires_minutes if expires_minutes is not None else settings.ACCESS_TOKEN_EXPIRE_MINUTES
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "sub": str(subject),  # JWT 规范要求 sub 是字符串
         "username": username,
@@ -91,7 +91,7 @@ def create_refresh_token(
     """
     settings = get_settings()
     days = expires_days if expires_days is not None else settings.REFRESH_TOKEN_EXPIRE_DAYS
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     jti = uuid.uuid4().hex
     payload: dict[str, Any] = {
         "sub": str(subject),

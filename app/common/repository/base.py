@@ -3,7 +3,7 @@
 各模块的具体 repository 继承 BaseRepository[Model] 即可获得基础 CRUD,
 复杂查询在子类中扩展。
 """
-from typing import Generic, Type, TypeVar
+from typing import Generic, TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +16,7 @@ ModelT = TypeVar("ModelT", bound=Base)
 class BaseRepository(Generic[ModelT]):
     """泛型 Repository 基类。"""
 
-    def __init__(self, session: AsyncSession, model: Type[ModelT]):
+    def __init__(self, session: AsyncSession, model: type[ModelT]):
         self.session = session
         self.model = model
 

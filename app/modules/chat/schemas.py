@@ -1,7 +1,7 @@
 """Chat API 数据结构:会话 CRUD + AI 聊天请求/响应。"""
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── 会话 ────────────────────────────────────────────────
 
@@ -25,8 +25,8 @@ class ConversationResponse(BaseModel):
     )
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    # Pydantic V2 写法。V1 的 class Config 已弃用,V3 会失效。
+    model_config = ConfigDict(from_attributes=True)
 
     @classmethod
     def from_model(cls, conv) -> "ConversationResponse":
@@ -60,8 +60,8 @@ class MessageResponse(BaseModel):
     token_count: int | None = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    # Pydantic V2 写法。V1 的 class Config 已弃用,V3 会失效。
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MessageListResponse(BaseModel):

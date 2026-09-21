@@ -1,4 +1,6 @@
 """API 总路由:聚合各业务模块 router,统一挂 /api/v1 前缀。"""
+from typing import Annotated
+
 from fastapi import APIRouter, Depends
 from redis.asyncio import Redis
 from sqlalchemy import text
@@ -26,8 +28,8 @@ api_router.include_router(ticket_router, prefix="/tickets", tags=["Tickets"])
 
 @api_router.get("/health", tags=["Health"])
 async def health_check(
-    db: AsyncSession = Depends(get_db_session),
-    redis: Redis = Depends(get_redis),
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ):
     """健康检查(readiness 探针):数据库 + Redis 连通性。
 
@@ -38,6 +40,6 @@ async def health_check(
     await db.execute(text("SELECT 1"))
     try:
         await redis.ping()
-    except Exception:
+    except Exception:  # noqa: BLE001 —— 任何 Redis 异常都归结为"依赖未就绪",统一转 503
         raise AppException(503, "Redis 不可用", http_status=503)
     return {"status": "ok", "database": "connected", "redis": "connected"}

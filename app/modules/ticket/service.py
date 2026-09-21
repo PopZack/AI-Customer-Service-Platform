@@ -120,10 +120,15 @@ class TicketService:
         return TicketMessageResponse.model_validate(ticket_msg)
 
     async def close(self, ticket_id: int, resolution: str | None = None) -> TicketResponse:
-        """关闭工单,同时结束会话。"""
+        """关闭工单,同时结束会话。
+
+        终止态是 DONE(已完成)。判断条件必须与 assign / reply 保持一致 ——
+        只检查 CLOSED 会让"重复关单"漏过去,二次调用还会再插一条"工单已完成"消息。
+        (TicketStatus.CLOSED 目前保留未用:留给日后"用户确认后才真正关闭"的流程。)
+        """
         ticket = await self._require(ticket_id)
-        if ticket.status == TicketStatus.CLOSED:
-            raise AppException(400, "工单已经关闭")
+        if ticket.status in (TicketStatus.DONE, TicketStatus.CLOSED):
+            raise AppException(400, "工单已结束,无法重复关单")
 
         ticket.status = TicketStatus.DONE
         self.session.add(

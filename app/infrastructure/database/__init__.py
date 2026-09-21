@@ -10,7 +10,7 @@ __all__ = [
     "Base",
     "BigIntPKMixin",
     "TimestampMixin",
+    "close_db",
     "get_db_session",
     "init_db",
-    "close_db",
 ]

@@ -1,7 +1,7 @@
 """Knowledge API 数据结构:知识库 CRUD + 文档上传/索引状态 + 检索预览。"""
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── 知识库 ──────────────────────────────────────────────
 
@@ -23,8 +23,8 @@ class KnowledgeBaseResponse(BaseModel):
     status: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    # Pydantic V2 写法。V1 的 class Config 已弃用,V3 会失效。
+    model_config = ConfigDict(from_attributes=True)
 
 
 class KnowledgeBaseListResponse(BaseModel):
@@ -60,8 +60,8 @@ class DocumentResponse(BaseModel):
     error_reason: str | None = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    # Pydantic V2 写法。V1 的 class Config 已弃用,V3 会失效。
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DocumentListResponse(BaseModel):
@@ -80,8 +80,8 @@ class ChunkResponse(BaseModel):
     embedding_status: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    # Pydantic V2 写法。V1 的 class Config 已弃用,V3 会失效。
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChunkListResponse(BaseModel):

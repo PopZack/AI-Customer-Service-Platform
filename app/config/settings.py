@@ -4,7 +4,13 @@
 """
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: JWT 密钥的默认值。生产环境继续用它 = 任何人都能伪造 token。
+_DEFAULT_JWT_SECRET = "change_me"
+#: HS256 的密钥长度下限。低于 32 字节时 PyJWT 会告警,且抗暴力破解能力不足。
+_MIN_JWT_SECRET_LEN = 32
 
 
 class Settings(BaseSettings):
@@ -32,7 +38,8 @@ class Settings(BaseSettings):
     REDIS_URL: str | None = None
 
     # ── JWT(第 11 阶段启用,第 12 阶段调整:access 缩短 + refresh)──
-    JWT_SECRET: str = "change_me"
+    # 开发环境可留默认值;生产环境(APP_ENV=prod)不设会直接启动失败,见下方校验
+    JWT_SECRET: str = _DEFAULT_JWT_SECRET
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # 引入 refresh 后标准值(第 11 阶段曾临时 1440/24h)
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -60,6 +67,26 @@ class Settings(BaseSettings):
     MAX_UPLOAD_MB: int = 20  # 单文件大小上限
     EMBED_BATCH_SIZE: int = 64  # 向量化批大小(单批过大时 ONNX 推理内存会飙升)
 
+
+    @model_validator(mode="after")
+    def _guard_production_secrets(self) -> "Settings":
+        """生产环境不允许沿用默认 JWT 密钥。
+
+        为什么放在配置层而不是业务代码里：密钥是全局的，一旦用默认值签发 token，
+        任何人都能自己造一个合法 token 冒充管理员 —— 这类问题必须在**启动时**暴露，
+        而不是等出事才发现。开发/测试环境(APP_ENV != prod)不受影响。
+        """
+        if self.APP_ENV == "prod":
+            if self.JWT_SECRET == _DEFAULT_JWT_SECRET:
+                raise ValueError(
+                    "生产环境必须设置 JWT_SECRET,不能使用默认值(否则 token 可被伪造)"
+                )
+            if len(self.JWT_SECRET) < _MIN_JWT_SECRET_LEN:
+                raise ValueError(
+                    f"生产环境的 JWT_SECRET 至少 {_MIN_JWT_SECRET_LEN} 个字符"
+                    f"(当前 {len(self.JWT_SECRET)})"
+                )
+        return self
 
 @lru_cache
 def get_settings() -> Settings:

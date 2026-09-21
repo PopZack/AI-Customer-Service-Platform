@@ -21,7 +21,7 @@ from app.models.user_system import (
     user_role,
 )
 
-__all__ = [
+__all__ = [  # noqa: RUF022 —— 按业务域分组可读性更好,不按字母序
     # 用户权限
     "User",
     "Role",

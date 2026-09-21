@@ -6,7 +6,7 @@
 """
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── 工单 ────────────────────────────────────────────────
 
@@ -25,8 +25,8 @@ class TicketResponse(BaseModel):
     summary: str | None = Field(None, description="首条消息摘要(工单表本身无标题字段)")
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    # Pydantic V2 写法。V1 的 class Config 已弃用,V3 会失效。
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TicketMessageResponse(BaseModel):
@@ -39,8 +39,8 @@ class TicketMessageResponse(BaseModel):
     content: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    # Pydantic V2 写法。V1 的 class Config 已弃用,V3 会失效。
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TicketDetailResponse(TicketResponse):

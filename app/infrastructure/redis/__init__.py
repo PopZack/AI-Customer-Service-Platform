@@ -6,4 +6,4 @@ from app.infrastructure.redis.client import (
     redis_client,
 )
 
-__all__ = ["redis_client", "get_redis", "init_redis", "close_redis"]
+__all__ = ["close_redis", "get_redis", "init_redis", "redis_client"]

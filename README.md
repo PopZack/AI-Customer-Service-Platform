@@ -7,12 +7,13 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7-red)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED)](https://www.docker.com/)
+[![CI](https://github.com/PopZack/AI-Customer-Service-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/PopZack/AI-Customer-Service-Platform/actions/workflows/ci.yml)
 
 ---
 
 ## ✨ 功能亮点
 
-### 已实现（Phase 9-16）
+### 已实现（Phase 9-18）
 
 | 能力 | 说明 | 阶段 |
 |---|---|---|
@@ -24,10 +25,11 @@
 | 📚 RAG 知识库 | 文档上传解析切块 / 本地 embedding / pgvector 入库 / 混合检索 / 带引用回答 | Phase 14 |
 | 🛠️ Agent + Tool | 5 个工具的 function calling：检索 / 查工单 / 建单 / 转人工 / 查用户资料 | Phase 15 |
 | 👥 AI + 人工协同 | 会话状态机（AI→等待人工→人工接管→结束）/ 显式+隐式转人工 / 工单闭环 | Phase 16 |
+| 📝 测试与工程化 | 67 个测试（单元 + 集成，真实 PG/Redis/embedding）/ 生产 Dockerfile / GitHub Actions | Phase 18 |
 
-### 规划中（Phase 17-22）
+### 规划中（Phase 19-22）
 
-测试与工程化 → Docker + CI/CD → 监控 → AI 评估 → 生产优化
+Docker Compose 编排 + Nginx + CD → 监控 → AI 评估 → 生产优化
 
 > 收尾采用**精简路线**：**Phase 17 消息队列跳过**（文档解析与 embedding 改用 FastAPI BackgroundTasks，本项目无高并发场景），Phase 18-22 按精简版收尾。
 
@@ -127,6 +129,9 @@ PostgreSQL 的全文检索**没有中文分词器**（需要 zhparser 扩展，�
 | **向量库** | **pgvector**（PostgreSQL 扩展，非独立服务） | **0.8.0，512 维** |
 | **Embedding** | **fastembed**（进程内 ONNX 推理，无需外部服务 / API key） | **BAAI/bge-small-zh-v1.5** |
 | 文档解析 | pymupdf（PDF）+ python-docx（DOCX） | Phase 14 |
+| 测试 | pytest + pytest-asyncio（真实 PG / Redis，仅 mock LLM） | 67 个用例 |
+| 代码规范 | ruff（check 已全绿） | 0.16+ |
+| CI | GitHub Actions（lint / test / build 三 job） | — |
 | 部署 | Docker Compose | Phase 19 |
 
 ---
@@ -195,26 +200,78 @@ uv run alembic downgrade -1
 # 重新生成依赖锁
 uv lock
 
-# 静态检查
+# 静态检查(Phase 18 已收敛至全绿)
 uv run ruff check .
 uv run ruff format .          # 格式化(ruff 的 formatter 兼容 black,已不再单独引 black)
+
+# 跑测试
+uv run pytest                 # 全量
+uv run pytest tests/unit      # 只跑单元测试(不需要数据库)
+uv run pytest -k 转人工        # 按名字筛
 
 # 重建 pgvector 镜像(仅当 docker compose 拉不到镜像时需要)
 docker build -t pgvector/pgvector:pg16 docker/pgvector/
 ```
+
+### 测试
+
+```bash
+uv run pytest
+```
+
+**67 个测试**，分两层：
+
+| 层 | 位置 | 依赖 | 说明 |
+|---|---|---|---|
+| 单元 | `tests/unit/` | 无 | Agent 循环（假 LLM 驱动脚本化的工具调用增量）、配置层密钥守卫 |
+| 集成 | `tests/integration/` | PostgreSQL + Redis + embedding 模型 | 认证链路、RAG 全链路、聊天 SSE、转人工与工单 |
+
+集成测试的几个刻意设计：
+
+- **真实 PostgreSQL / Redis / embedding，只 mock LLM。** embedding 是本地纯函数，
+  真跑才能验出"切块 → 向量化 → 检索"是否真的可用；mock 掉它会让 RAG 测试退化成
+  "永远命中"的假测试。LLM 是唯一必须 mock 的（要联网、要花钱、结果不确定）。
+- **工具是真实执行的。** 聊天测试里模型输出由假客户端顶替，但它发出的
+  `search_knowledge` 调用会真的去查数据库里的向量 —— 整条
+  "模型调工具 → 工具真检索 → 结果回填 → 模型作答"都在覆盖内。
+- **测试库是独立数据库**（`<开发库名>_test`，每次会话重建），不是 schema。
+  检索层有手写 SQL，用 schema 会踩 search_path 解析的坑。
+- 每个用例结束 `TRUNCATE` 所有表**并清理 Redis 里 `chat:*` 的计数键** ——
+  后者是隐式转人工的计数器，而 `RESTART IDENTITY` 会让下一条用例复用会话 ID，
+  不清就会"莫名其妙提前转人工"。这个坑真踩过。
+
+> 单元测试不依赖任何外部服务，可以直接 `uv run pytest tests/unit` 秒级跑完。
+
+### 用 Docker 跑
+
+```bash
+docker build -t ai-customer-service .
+docker run --rm -p 8000:8000 \
+  -e DATABASE_URL=postgresql+asyncpg://ai_cs:ai_cs_pwd@host.docker.internal:5432/ai_customer_service \
+  -e REDIS_URL=redis://host.docker.internal:6379/0 \
+  -e JWT_SECRET=<至少 32 字符> \
+  ai-customer-service
+```
+
+镜像以**非 root** 运行、内置 healthcheck（探 liveness）。两个容易漏的点已在
+Dockerfile 里处理并注明：`static/` 必须拷进去（否则容器里演示页 404）、
+以及 onnxruntime 依赖 `libgomp1`（slim 基础镜像默认没有）。
+
+> ⚠️ 本机 Docker Hub 不可达，**该镜像无法在本地构建验证**，
+> 由 CI 的 `build` job 实际构建（GitHub runner 能正常访问 Docker Hub 与 ghcr.io）。
 
 > ⚠️ **第 16 阶段的权限取舍**：工单的指派/回复采用**基于数据归属的最小门槛**
 > （认领即接管、已指派者才能回复），**未启用角色权限校验**。
 > 设计文档定义了 `ticket:view` / `ticket:edit` 权限码，但角色与权限数据尚未播种，
 > 此时强校验会让所有人 403。等权限体系落地后再收紧。
 >
-> ⚠️ **已知技术债**：schemas 里仍在用 Pydantic V1 风格的 `class Config`（已弃用，
-> V3 会失效），正确写法是 `model_config = ConfigDict(from_attributes=True)`；
-> 连同下面的 lint 一起在 Phase 18 收敛。
+> ✅ **Phase 18 已解决**：`uv run ruff check .` 从 57 条存量错误收敛到**全绿**；
+> schemas 已全部迁到 Pydantic V2 的 `model_config = ConfigDict(...)`（V1 的
+> `class Config` 在 V3 会失效）；全项目路由的依赖注入统一为
+> `Annotated[AsyncSession, Depends(...)]`，消掉了 FastAPI 写法触发的 `B008`。
 >
-> ⚠️ **已知待收敛**：`uv run ruff check .` 目前**不是全绿**（存量错误，主要是 FastAPI
-> 依赖注入写法触发的 `B008`）。收敛排在 Phase 18「测试与工程化」。新代码请保证自己的
-> 文件零新增错误 —— 例如用 `Annotated[AsyncSession, Depends(...)]` 代替 `db: AsyncSession = Depends(...)`。
+> ⚠️ **仍未做**：`ruff format` 尚未作为检查项接入 CI（存量文件格式未统一），
+> 只跑 `ruff check`。
 
 ---
 
@@ -411,7 +468,16 @@ AI-Customer-Service-Platform/
 │   └── index.html              # ✅ 最小演示页（原生 HTML + fetch 流式）
 ├── docker/
 │   └── pgvector/Dockerfile     # ✅ 本地构建 pgvector 镜像（不依赖 Docker Hub）
-├── alembic/                    # 数据库迁移
+├── alembic/                    # 数据库迁移（含 pgvector 扩展与索引）
+├── tests/                      # ✅ 测试
+│   ├── conftest.py             #   测试环境准备（切测试库、放开限流、关 SQL 回显）
+│   ├── unit/                   #   单元测试：Agent 循环、配置守卫（不需要外部服务）
+│   └── integration/            #   集成测试：真实 PG / Redis / embedding
+├── .github/workflows/ci.yml    # ✅ CI：lint / test / build
+├── Dockerfile                  # ✅ 生产镜像（多阶段、非 root、healthcheck）
+├── .dockerignore
+├── docker/
+│   └── pgvector/Dockerfile     # ✅ 本地构建 pgvector 镜像（不依赖 Docker Hub）
 ├── docker-compose.yml          # PostgreSQL(pgvector) + Redis
 ├── pyproject.toml              # 依赖声明（uv）
 ├── .env.example                # 环境变量模板
@@ -443,8 +509,8 @@ AI-Customer-Service-Platform/
 | 15 | V7 Agent + Tool | 🛠️ | ✅ |
 | 16 | V8 AI + 人工协同 | 👥 | ✅ |
 | 17 | V9 消息队列 / Worker | 📨 | ⏭️ 已跳过 |
-| 18 | V10 测试与工程化 | 📝 | ⏳ 下一阶段 |
-| 19 | V11 Docker + Nginx + CI/CD | 🐳 | ⏳ |
+| 18 | V10 测试与工程化 | 📝 | ✅ |
+| 19 | V11 Docker + Nginx + CI/CD | 🐳 | ⏳ 下一阶段 |
 | 20 | V12 日志 / 监控 / Tracing | 📊 | ⏳ |
 | 21 | V13 AI Evaluation | 🧪 | ⏳ |
 | 22 | V14 生产级优化 | 🚀 | ⏳ |

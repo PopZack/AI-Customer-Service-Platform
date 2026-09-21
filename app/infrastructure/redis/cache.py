@@ -6,7 +6,8 @@
 key 约定:cache:{namespace}:{key}(调用方自行拼接 namespace)
 """
 import json
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from redis.asyncio import Redis
 

@@ -7,6 +7,7 @@
 - 业务 service 实例依赖(后续阶段)
 """
 from collections.abc import AsyncGenerator
+from typing import Annotated
 
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -34,8 +35,8 @@ async def get_redis() -> Redis:
 
 
 async def get_current_user(
-    creds: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: AsyncSession = Depends(get_db_session),
+    creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> User:
     """从 Authorization: Bearer <token> 解析当前用户。
 

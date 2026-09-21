@@ -17,9 +17,9 @@ from alembic import context
 # 确保项目根目录在 sys.path 中(alembic 从 alembic/ 子目录运行)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.infrastructure.database import Base  # noqa: E402
-import app.models  # noqa: E402,F401  (导入模型以注册到 Base.metadata)
-from app.config.settings import get_settings  # noqa: E402
+import app.models  # noqa: F401  (导入模型以注册到 Base.metadata)
+from app.config.settings import get_settings
+from app.infrastructure.database import Base
 
 config = context.config
 
